@@ -95,14 +95,14 @@
     </a>
 
     @if(session('ok'))
-        <div class="notice ok">
+        <div class="notice ok" data-flash="ok">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"/></svg>
             <span>{{ session('ok') }}</span>
         </div>
     @endif
 
     @if(session('error'))
-        <div class="notice err">
+        <div class="notice err" data-flash="err">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 8v5"/><path d="M12 16h.01"/></svg>
             <span>{{ session('error') }}</span>
         </div>
@@ -174,7 +174,7 @@
             <div class="action-buttons">
                 @if(in_array($status, ['ACTIVE', 'QC']) && !empty($data['can_publish']))
                     <form method="POST" action="{{ route('receiving_transaksi.publish', ['id' => $header['id']]) }}"
-                          onsubmit="if (!confirm('Publish {{ $header['code'] }} ke tahap berikutnya?')) { return false; } this.querySelector('button').disabled = true; return true;">
+                          data-confirm="Publish {{ $header['code'] }} ke tahap berikutnya?">
                         @csrf
                         <input type="hidden" name="from" value="{{ $fromQuery }}">
                         <button type="submit" class="btn-acc">
@@ -279,7 +279,7 @@
                                     <span class="status {{ $log['status'] === 'OK' ? 'ok' : 'not' }}">{{ $log['status'] }}</span>
                                     @if(!empty($data['can_delete']))
                                         <form method="POST" action="{{ route('receiving_transaksi.qc_delete', ['id' => $header['id'], 'detailId' => $detail['id'], 'logId' => $log['id']]) }}"
-                                              onsubmit="if (!confirm('Hapus log QC {{ $num($log['qty']) }}?')) { return false; } this.querySelector('button').disabled = true; return true;"
+                                              data-confirm="Hapus log QC {{ $num($log['qty']) }}?"
                                               style="margin-left:auto;">
                                             @csrf
                                             <input type="hidden" name="from" value="{{ $fromQuery }}">
@@ -347,7 +347,7 @@
                                     @if($status === 'ACTIVE' && !empty($data['can_delete']))
                                         <td>
                                             <form method="POST" action="{{ route('receiving_transaksi.detail_delete', ['id' => $header['id'], 'detailId' => $detail['id']]) }}"
-                                                  onsubmit="if (!confirm('Hapus produk {{ $detail['product'] }} dari penerimaan?')) { return false; } this.querySelector('button').disabled = true; return true;">
+                                                  data-confirm="Hapus produk {{ $detail['product'] }} dari penerimaan?">
                                                 @csrf
                                                 <input type="hidden" name="from" value="{{ $fromQuery }}">
                                                 <button type="submit" class="mini-btn ghost" title="Hapus detail">Hapus</button>

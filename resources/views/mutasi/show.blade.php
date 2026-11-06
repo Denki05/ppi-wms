@@ -112,14 +112,14 @@
     </a>
 
     @if(session('ok'))
-        <div class="notice ok">
+        <div class="notice ok" data-flash="ok">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"/></svg>
             <span>{{ session('ok') }}</span>
         </div>
     @endif
 
     @if(session('error'))
-        <div class="notice err">
+        <div class="notice err" data-flash="err">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 8v5"/><path d="M12 16h.01"/></svg>
             <span>{{ session('error') }}</span>
         </div>
@@ -239,7 +239,7 @@
 
                     <div class="action-buttons" style="justify-content: flex-end; margin-top: 16px;">
                         <form method="POST" action="{{ route('mutasi.cancel', $params()) }}"
-                              onsubmit="return confirm('Batalkan checklist? Stok yang sudah dipotong akan dikembalikan.');">
+                              data-confirm="Batalkan checklist? Stok yang sudah dipotong akan dikembalikan.">
                             @csrf
                             <button type="submit" class="btn-line">Cancel</button>
                         </form>
@@ -326,41 +326,46 @@
 
 <script>
     (function () {
-        var checkAll = document.getElementById('check-all');
-        var formChecklist = document.getElementById('form-checklist');
-
-        if (checkAll) {
-            checkAll.addEventListener('click', function () {
-                formChecklist.querySelectorAll('input[name="items[]"]').forEach(function (input) {
-                    input.checked = true;
-                });
-            });
-        }
-
-        if (formChecklist) {
-            formChecklist.addEventListener('submit', function (event) {
-                var inputs = formChecklist.querySelectorAll('input[name="items[]"]');
-                var checked = formChecklist.querySelectorAll('input[name="items[]"]:checked');
-
-                if (inputs.length !== checked.length) {
-                    event.preventDefault();
-                    alert('Semua produk wajib dicentang.');
+        Wms.bindOnce('mutasi-show', function () {
+            document.addEventListener('click', function (event) {
+                if (!event.target.closest || !event.target.closest('#check-all')) { return; }
+                var form = document.getElementById('form-checklist');
+                if (form) {
+                    form.querySelectorAll('input[name="items[]"]').forEach(function (input) {
+                        input.checked = true;
+                    });
                 }
             });
-        }
+        });
 
-        var status = document.getElementById('status_barang');
-        var upload = document.getElementById('upload-wrapper');
+        Wms.onSwap(function (main) {
+            var formChecklist = main.querySelector('#form-checklist');
+            if (formChecklist) {
+                // Dipasang di form (bukan document) agar validasi berjalan sebelum submit live.
+                formChecklist.addEventListener('submit', function (event) {
+                    var inputs = formChecklist.querySelectorAll('input[name="items[]"]');
+                    var checked = formChecklist.querySelectorAll('input[name="items[]"]:checked');
 
-        function toggleUpload() {
-            if (!status || !upload) return;
-            upload.style.display = status.value === '2' ? '' : 'none';
-        }
+                    if (inputs.length !== checked.length) {
+                        event.preventDefault();
+                        Wms.alert('Semua produk wajib dicentang.', 'Checklist belum lengkap');
+                    }
+                });
+            }
 
-        if (status) {
-            status.addEventListener('change', toggleUpload);
-            toggleUpload();
-        }
+            var status = main.querySelector('#status_barang');
+            var upload = main.querySelector('#upload-wrapper');
+
+            function toggleUpload() {
+                if (!status || !upload) { return; }
+                upload.style.display = status.value === '2' ? '' : 'none';
+            }
+
+            if (status) {
+                status.addEventListener('change', toggleUpload);
+                toggleUpload();
+            }
+        });
     })();
 </script>
 @endsection

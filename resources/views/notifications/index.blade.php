@@ -57,13 +57,13 @@
     @endphp
 
     @if(session('ok'))
-        <div class="notice ok">
+        <div class="notice ok" data-flash="ok">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"/></svg>
             <span>{{ session('ok') }}</span>
         </div>
     @endif
     @if(session('error'))
-        <div class="notice err">
+        <div class="notice err" data-flash="err">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 8v5"/><path d="M12 16h.01"/></svg>
             <span>{{ session('error') }}</span>
         </div>

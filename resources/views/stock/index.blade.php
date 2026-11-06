@@ -464,46 +464,53 @@
 
     <script>
         (function () {
-            var modal = document.getElementById('stock-modal');
-            var frame = document.getElementById('stock-modal-frame');
-            var title = document.getElementById('stock-modal-title');
-            var closeBtn = document.getElementById('stock-modal-close');
-            if (!modal || !frame) { return; }
-
-            function open(url, label) {
-                title.textContent = label || 'Kartu Stock';
-                frame.src = url;
-                modal.classList.add('open');
-                modal.setAttribute('aria-hidden', 'false');
-                document.body.classList.add('stock-modal-open');
-                closeBtn.focus();
-            }
-
-            function close() {
-                modal.classList.remove('open');
-                modal.setAttribute('aria-hidden', 'true');
-                document.body.classList.remove('stock-modal-open');
-                frame.src = 'about:blank';
-            }
-
-            document.addEventListener('click', function (event) {
-                var link = event.target.closest('[data-stock-modal]');
-                if (link) {
-                    event.preventDefault();
-                    open(link.getAttribute('data-modal-url'), link.getAttribute('data-modal-title'));
-                    return;
+            Wms.bindOnce('stock-index', function () {
+                function els() {
+                    return {
+                        modal: document.getElementById('stock-modal'),
+                        frame: document.getElementById('stock-modal-frame'),
+                        title: document.getElementById('stock-modal-title'),
+                        closeBtn: document.getElementById('stock-modal-close')
+                    };
                 }
-                if (event.target === modal) {
-                    close();
-                }
-            });
 
-            closeBtn.addEventListener('click', close);
-
-            document.addEventListener('keydown', function (event) {
-                if (event.key === 'Escape' && modal.classList.contains('open')) {
-                    close();
+                function open(url, label) {
+                    var el = els();
+                    if (!el.modal || !el.frame) { return; }
+                    el.title.textContent = label || 'Kartu Stock';
+                    el.frame.src = url;
+                    el.modal.classList.add('open');
+                    el.modal.setAttribute('aria-hidden', 'false');
+                    document.body.classList.add('stock-modal-open');
+                    el.closeBtn.focus();
                 }
+
+                function close() {
+                    var el = els();
+                    if (!el.modal || !el.frame) { return; }
+                    el.modal.classList.remove('open');
+                    el.modal.setAttribute('aria-hidden', 'true');
+                    document.body.classList.remove('stock-modal-open');
+                    el.frame.src = 'about:blank';
+                }
+
+                // Capture phase: batalkan navigasi live sebelum handler link global.
+                document.addEventListener('click', function (event) {
+                    if (!event.target.closest) { return; }
+                    var link = event.target.closest('[data-stock-modal]');
+                    if (link) {
+                        event.preventDefault();
+                        open(link.getAttribute('data-modal-url'), link.getAttribute('data-modal-title'));
+                        return;
+                    }
+                    if (event.target.closest('#stock-modal-close') || event.target.id === 'stock-modal') {
+                        close();
+                    }
+                }, true);
+
+                document.addEventListener('keydown', function (event) {
+                    if (event.key === 'Escape') { close(); }
+                });
             });
         })();
     </script>

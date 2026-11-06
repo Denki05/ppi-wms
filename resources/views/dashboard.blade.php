@@ -425,8 +425,10 @@
             'do.belum_print'         => ['route' => 'delivery_order', 'params' => ['tab' => 'SPK', 'printed' => 0]],
             'do.siap_kirim'          => ['route' => 'delivery_order', 'params' => ['tab' => 'CETAK']],
             'do.belum_resi'          => ['route' => 'delivery_order', 'params' => ['tab' => 'RESI']],
-            'mutasi.perlu_cek'       => ['route' => 'mutasi', 'params' => ['tab' => 'AKTIF']],
-            'mutasi.belum_diambil'   => ['route' => 'mutasi', 'params' => ['tab' => 'BELUM']],
+            'mutasi.showroom.perlu_cek'   => ['route' => 'mutasi', 'params' => ['type' => 'showroom', 'tab' => 'AKTIF']],
+            'mutasi.gudang.perlu_cek'     => ['route' => 'mutasi', 'params' => ['type' => 'gudang', 'tab' => 'AKTIF']],
+            'mutasi.showroom.belum_diambil' => ['route' => 'mutasi', 'params' => ['type' => 'showroom', 'tab' => 'BELUM']],
+            'mutasi.gudang.belum_diambil'   => ['route' => 'mutasi', 'params' => ['type' => 'gudang', 'tab' => 'BELUM']],
             'receiving.qc'           => ['route' => 'receiving', 'params' => ['status' => 'QC']],
             'receiving.menunggu_acc' => ['route' => 'receiving', 'params' => ['status' => 'READY']],
             'komplain.menunggu_acc'  => ['route' => 'komplain', 'params' => ['status' => 'ACTIVE']],
@@ -703,11 +705,11 @@
     </section>
 
     <script>
-    document.addEventListener('DOMContentLoaded', function () {
-        var sel = document.getElementById('perf-month');
-        if (!sel) return;
+    Wms.onSwap(function (main) {
+        var sel = main.querySelector('#perf-month');
+        if (!sel) { return; }
         sel.addEventListener('change', function () {
-            document.querySelectorAll('[data-perf-month]').forEach(function (el) {
+            main.querySelectorAll('[data-perf-month]').forEach(function (el) {
                 el.style.display = el.getAttribute('data-perf-month') === sel.value ? '' : 'none';
             });
         });

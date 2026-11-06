@@ -243,7 +243,7 @@
                                                class="btn-reset" style="padding:4px 10px;min-height:0;font-size:11px;">Detail</a>
                                             @if($row['status'] === 'QC' && !empty($perms['can_update']))
                                                 <form method="POST" action="{{ route('receiving.cancel', ['id' => $row['id']]) }}"
-                                                      onsubmit="if (!confirm('Batalkan penerimaan {{ $row['code'] }} ke ACTIVE? Ditolak bila sudah ada log QC.')) { return false; } this.querySelector('button').disabled = true; return true;">
+                                                      data-confirm="Batalkan penerimaan {{ $row['code'] }} ke ACTIVE? Ditolak bila sudah ada log QC.">
                                                     @csrf
                                                     <input type="hidden" name="from" value="{{ $fromQuery }}">
                                                     <button type="submit" class="mini-btn ghost" title="Kembalikan ke Active">Batal</button>

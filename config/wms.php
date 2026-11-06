@@ -62,8 +62,8 @@ return [
             'phase'       => 4,
         ],
         'stock' => [
-            'label'       => 'Inventory - Stock',
-            'short'       => 'Inventory - Stock',
+            'label'       => 'Stock',
+            'short'       => 'Stock',
             'mark'        => 'ST',
             'description' => 'Lihat stock dan mutasi per gudang.',
             'phase'       => 2,
@@ -100,8 +100,10 @@ return [
             'menu'  => 'mutasi',
             'label' => 'Checker Mutasi',
             'items' => [
-                ['key' => 'mutasi.perlu_cek', 'label' => 'Aktif', 'hint' => 'Mutasi sudah dipublish'],
-                ['key' => 'mutasi.belum_diambil', 'label' => 'Belum Diambil', 'hint' => 'Barang belum diambil'],
+                ['key' => 'mutasi.showroom.perlu_cek', 'label' => 'Aktif · Showroom', 'hint' => 'Mutasi showroom sudah dipublish'],
+                ['key' => 'mutasi.gudang.perlu_cek', 'label' => 'Aktif · Gudang Utama', 'hint' => 'Mutasi gudang utama sudah dipublish'],
+                ['key' => 'mutasi.showroom.belum_diambil', 'label' => 'Belum Diambil · Showroom', 'hint' => 'Barang showroom belum diambil'],
+                ['key' => 'mutasi.gudang.belum_diambil', 'label' => 'Belum Diambil · Gudang Utama', 'hint' => 'Barang gudang utama belum diambil'],
             ],
         ],
         [

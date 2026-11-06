@@ -34,14 +34,14 @@
     </a>
 
     @if(session('ok'))
-        <div class="notice ok">
+        <div class="notice ok" data-flash="ok">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"/></svg>
             <span>{{ session('ok') }}</span>
         </div>
     @endif
 
     @if(session('error'))
-        <div class="notice err">
+        <div class="notice err" data-flash="err">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 8v5"/><path d="M12 16h.01"/></svg>
             <span>{{ session('error') }}</span>
         </div>
@@ -193,7 +193,7 @@
                     <b>Kerjakan DO.</b> Centang seluruh barang setelah dicek. Setelah disimpan, DO masuk tab Cetak SJ.
                 </div>
                 <form method="POST" action="{{ route('delivery_order.packed', ['id' => $header['id']]) }}" id="frmPacked"
-                      onsubmit="if (!confirm('Simpan hasil pemeriksaan? Seluruh barang harus sudah dicentang.')) { return false; } this.querySelector('button').disabled = true; this.querySelector('button').textContent = 'Memproses...'; return true;">
+                      data-confirm="Simpan hasil pemeriksaan? Seluruh barang harus sudah dicentang.">
                     @csrf
                     <input type="hidden" name="from" value="{{ $backQuery }}">
                     <button type="submit" class="btn-acc" id="btnPacked" disabled>
@@ -234,7 +234,7 @@
                     @endif
                     @if(!empty($actions['can_deliver']))
                         <form method="POST" action="{{ route('delivery_order.sending', ['id' => $header['id']]) }}"
-                              onsubmit="if (!confirm('Langkah 2.\nPastikan surat jalan DO {{ $header['do_code'] }} (langkah 1) sudah tercetak terlebih dahulu.\n\nBerangkatkan DO? Stok fisik akan dipotong.')) { return false; } this.querySelector('button').disabled = true; this.querySelector('button').textContent = 'Memproses...'; return true;">
+                              data-confirm="Langkah 2. Pastikan surat jalan DO {{ $header['do_code'] }} (langkah 1) sudah tercetak terlebih dahulu. Berangkatkan DO? Stok fisik akan dipotong.">
                             @csrf
                             <input type="hidden" name="from" value="{{ $backQuery }}">
                             <button type="submit" class="btn-acc">
@@ -281,7 +281,7 @@
 
                     <form method="POST" action="{{ route('delivery_order.sent', ['id' => $header['id']]) }}"
                           enctype="multipart/form-data"
-                          onsubmit="if (!confirm('Selesaikan DO {{ $header['do_code'] }} dan simpan resi?')) { return false; } this.querySelector('button').disabled = true; this.querySelector('button').textContent = 'Memproses...'; return true;">
+                          data-confirm="Selesaikan DO {{ $header['do_code'] }} dan simpan resi?">
                         @csrf
                         <input type="hidden" name="from" value="{{ $backQuery }}">
 
@@ -387,30 +387,30 @@
 
     <script type="text/javascript">
         (function () {
-            var all = document.getElementById('check-all-items');
-            var items = Array.prototype.slice.call(document.querySelectorAll('.confirm-item'));
-            var save = document.getElementById('btnPacked');
-
             function sync() {
-                if (!save) {
-                    return;
-                }
+                var items = Array.prototype.slice.call(document.querySelectorAll('.confirm-item'));
+                var save = document.getElementById('btnPacked');
+                if (!save) { return; }
                 var checked = items.filter(function (el) { return el.checked; }).length;
                 save.disabled = items.length === 0 || checked !== items.length;
             }
 
-            if (all) {
-                all.addEventListener('change', function () {
-                    items.forEach(function (el) { el.checked = all.checked; });
-                    sync();
+            Wms.bindOnce('do-show', function () {
+                document.addEventListener('change', function (event) {
+                    if (!event.target.closest) { return; }
+                    if (event.target.id === 'check-all-items') {
+                        var all = event.target;
+                        document.querySelectorAll('.confirm-item').forEach(function (el) {
+                            el.checked = all.checked;
+                        });
+                        sync();
+                    } else if (event.target.classList.contains('confirm-item')) {
+                        sync();
+                    }
                 });
-            }
-
-            items.forEach(function (el) {
-                el.addEventListener('change', sync);
             });
 
-            sync();
+            Wms.onSwap(sync);
         })();
     </script>
 @endsection

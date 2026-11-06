@@ -166,14 +166,14 @@
     </a>
 
     @if(session('ok'))
-        <div class="notice ok">
+        <div class="notice ok" data-flash="ok">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"/></svg>
             <span>{{ session('ok') }}</span>
         </div>
     @endif
 
     @if(session('error'))
-        <div class="notice err">
+        <div class="notice err" data-flash="err">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 8v5"/><path d="M12 16h.01"/></svg>
             <span>{{ session('error') }}</span>
         </div>
@@ -230,14 +230,6 @@
         </section>
 
         <div class="stat-grid">
-            <div class="stat" style="--accent: #0f766e;">
-                <span>Produk</span>
-                <b>{{ (int) ($stats['items'] ?? 0) }}</b><small>baris</small>
-            </div>
-            <div class="stat" style="--accent: #3b82f6;">
-                <span>Qty PO</span>
-                <b>{{ $num($stats['qty_po'] ?? 0) }}</b>
-            </div>
             <div class="stat" style="--accent: #8b5cf6;">
                 <span>Qty Diterima</span>
                 <b>{{ $num($stats['qty_ri'] ?? 0) }}</b>
@@ -250,18 +242,22 @@
                 <span>QC OK</span>
                 <b>{{ $num($stats['qc_ok'] ?? 0) }}</b>
             </div>
-            <div class="stat" style="--accent: #dc2626;">
-                <span>QC NOT OK</span>
-                <b>{{ $num($stats['qc_not_ok'] ?? 0) }}</b>
-            </div>
-            <div class="stat" style="--accent: #f59e0b;">
-                <span>QC HOLD</span>
-                <b>{{ $num($stats['qc_hold'] ?? 0) }}</b>
-            </div>
             <div class="stat" style="--accent: #0891b2;">
                 <span>QC Disetujui</span>
                 <b>{{ $num($stats['qc_approved'] ?? 0) }}</b>
             </div>
+            @if((float) ($stats['qc_not_ok'] ?? 0) > 0)
+                <div class="stat" style="--accent: #dc2626;">
+                    <span>QC NOT OK</span>
+                    <b>{{ $num($stats['qc_not_ok'] ?? 0) }}</b>
+                </div>
+            @endif
+            @if((float) ($stats['qc_hold'] ?? 0) > 0)
+                <div class="stat" style="--accent: #f59e0b;">
+                    <span>QC HOLD</span>
+                    <b>{{ $num($stats['qc_hold'] ?? 0) }}</b>
+                </div>
+            @endif
         </div>
 
         @php
@@ -289,7 +285,7 @@
             <div class="action-buttons">
                 @if($status === 'ACTIVE' && !empty($data['can_publish']))
                     <form method="POST" action="{{ route('receiving.publish', ['id' => $header['id']]) }}"
-                          onsubmit="if (!confirm('Publish penerimaan {{ $header['code'] }} ke tahap QC?')) { return false; } this.querySelector('button').disabled = true; return true;">
+                          data-confirm="Publish penerimaan {{ $header['code'] }} ke tahap QC?">
                         @csrf
                         <input type="hidden" name="from" value="{{ $fromQuery }}">
                         <button type="submit" class="btn-acc">
@@ -302,7 +298,7 @@
                 @if($status === 'QC' && !empty($data['can_publish']))
                     @php($qcBlocked = $qcIncomplete || $qcPendingApproval)
                     <form method="POST" action="{{ route('receiving.publish', ['id' => $header['id']]) }}"
-                          onsubmit="if (!confirm('Publish penerimaan {{ $header['code'] }} ke tahap Ready?')) { return false; } this.querySelector('button').disabled = true; return true;">
+                          data-confirm="Publish penerimaan {{ $header['code'] }} ke tahap Ready?">
                         @csrf
                         <input type="hidden" name="from" value="{{ $fromQuery }}">
                         <button type="submit" class="btn-acc" {{ $qcBlocked ? 'disabled' : '' }}
@@ -315,7 +311,7 @@
 
                 @if($status === 'QC' && !empty($data['can_cancel']))
                     <form method="POST" action="{{ route('receiving.cancel', ['id' => $header['id']]) }}"
-                          onsubmit="if (!confirm('Kembalikan penerimaan {{ $header['code'] }} ke ACTIVE? Ditolak bila sudah ada log QC.')) { return false; } this.querySelector('button').disabled = true; return true;">
+                          data-confirm="Kembalikan penerimaan {{ $header['code'] }} ke ACTIVE? Ditolak bila sudah ada log QC.">
                         @csrf
                         <input type="hidden" name="from" value="{{ $fromQuery }}">
                         <button type="submit" class="btn-line">
@@ -327,7 +323,7 @@
 
                 @if($status === 'READY' && !empty($data['can_rollback']))
                     <form method="POST" action="{{ route('receiving.rollback', ['id' => $header['id']]) }}"
-                          onsubmit="if (!confirm('Kembalikan penerimaan {{ $header['code'] }} ke tahap QC untuk revisi?')) { return false; } this.querySelector('button').disabled = true; return true;">
+                          data-confirm="Kembalikan penerimaan {{ $header['code'] }} ke tahap QC untuk revisi?">
                         @csrf
                         <input type="hidden" name="from" value="{{ $fromQuery }}">
                         <button type="submit" class="btn-line">
@@ -429,7 +425,7 @@
                                         <span class="qc-log-actions">
                                             @if($log['status'] === 'OK' && $log['is_sellable'] && !$log['is_approved'] && !empty($data['can_approve_qc']))
                                                 <form method="POST" action="{{ route('receiving.qc_approve', ['id' => $header['id'], 'detailId' => $row['id'], 'logId' => $log['id']]) }}"
-                                                      onsubmit="if (!confirm('Approve QC {{ $num($log['qty']) }}? Stok akan masuk dan PO dipotong.')) { return false; } this.querySelector('button').disabled = true; return true;">
+                                                      data-confirm="Approve QC {{ $num($log['qty']) }}? Stok akan masuk dan PO dipotong.">
                                                     @csrf
                                                     <input type="hidden" name="from" value="{{ $fromQuery }}">
                                                     <input type="hidden" name="qty_qc" value="{{ $log['qty'] }}">
@@ -441,7 +437,7 @@
                                             @endif
                                             @if(!($log['is_sellable'] && $log['is_approved']) && !empty($data['can_delete_qc']))
                                                 <form method="POST" action="{{ route('receiving.qc_delete', ['id' => $header['id'], 'detailId' => $row['id'], 'logId' => $log['id']]) }}"
-                                                      onsubmit="if (!confirm('Hapus log QC {{ $num($log['qty']) }}?')) { return false; } this.querySelector('button').disabled = true; return true;">
+                                                      data-confirm="Hapus log QC {{ $num($log['qty']) }}?">
                                                     @csrf
                                                     <input type="hidden" name="from" value="{{ $fromQuery }}">
                                                     <input type="hidden" name="qty_qc" value="{{ $log['qty'] }}">
@@ -486,32 +482,40 @@
 
                 <script>
                     (function () {
-                        document.querySelectorAll('[data-qc-open]').forEach(function (btn) {
-                            btn.addEventListener('click', function () {
-                                var modal = document.getElementById(btn.getAttribute('data-qc-open'));
-                                if (modal) {
-                                    modal.classList.add('open');
-                                    modal.setAttribute('aria-hidden', 'false');
-                                    document.body.style.overflow = 'hidden';
+                        Wms.bindOnce('receiving-show', function () {
+                            document.addEventListener('click', function (event) {
+                                if (!event.target.closest) { return; }
+
+                                var opener = event.target.closest('[data-qc-open]');
+                                if (opener) {
+                                    var modal = document.getElementById(opener.getAttribute('data-qc-open'));
+                                    if (modal) {
+                                        modal.classList.add('open');
+                                        modal.setAttribute('aria-hidden', 'false');
+                                        document.body.style.overflow = 'hidden';
+                                    }
+                                    return;
+                                }
+
+                                var closer = event.target.closest('[data-qc-close]');
+                                if (closer) {
+                                    var open = closer.closest('.qc-modal');
+                                    if (open) {
+                                        open.classList.remove('open');
+                                        open.setAttribute('aria-hidden', 'true');
+                                        document.body.style.overflow = '';
+                                    }
                                 }
                             });
-                        });
-                        document.querySelectorAll('.qc-modal').forEach(function (modal) {
-                            modal.addEventListener('click', function (event) {
-                                if (event.target.closest('[data-qc-close]')) {
+
+                            document.addEventListener('keydown', function (event) {
+                                if (event.key !== 'Escape') { return; }
+                                document.querySelectorAll('.qc-modal.open').forEach(function (modal) {
                                     modal.classList.remove('open');
                                     modal.setAttribute('aria-hidden', 'true');
-                                    document.body.style.overflow = '';
-                                }
+                                });
+                                document.body.style.overflow = '';
                             });
-                        });
-                        document.addEventListener('keydown', function (event) {
-                            if (event.key !== 'Escape') { return; }
-                            document.querySelectorAll('.qc-modal.open').forEach(function (modal) {
-                                modal.classList.remove('open');
-                                modal.setAttribute('aria-hidden', 'true');
-                            });
-                            document.body.style.overflow = '';
                         });
                     })();
                 </script>

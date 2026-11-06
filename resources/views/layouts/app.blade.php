@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>@yield('title', 'WMS Gudang') — SPV Logistik</title>
-    <style>
+    <style id="wmsBaseStyle">
         * { box-sizing: border-box; }
         body {
             margin: 0;
@@ -185,6 +185,69 @@
         .notif-head small { display: block; font-size: 10.5px; color: #94a3b8; margin-top: 1px; }
         .notif-head a { font-size: 11.5px; font-weight: 700; color: #0f766e; white-space: nowrap; }
         .notif-head a:hover { text-decoration: underline; }
+        .notif-head-actions { display: flex; align-items: center; gap: 10px; }
+        .notif-sound {
+            display: flex; align-items: center; justify-content: center;
+            width: 22px; height: 22px; padding: 0;
+            border: 0; border-radius: 6px; background: none;
+            color: #64748b; cursor: pointer;
+        }
+        .notif-sound:hover { background: #f1f7f5; color: #0f766e; }
+        .notif-sound.muted { color: #cbd5e1; }
+        .notif-sound svg { width: 14px; height: 14px; }
+        main.wms-live-busy { opacity: .55; pointer-events: none; transition: opacity .15s ease; }
+        /* Indikator memuat halaman tanpa reload. */
+        .wms-progress {
+            position: fixed;
+            top: 0; left: 0; right: 0;
+            height: 3px;
+            z-index: 9999;
+            overflow: hidden;
+            opacity: 0;
+            pointer-events: none;
+            transition: opacity .18s ease;
+        }
+        .wms-progress.on { opacity: 1; }
+        .wms-progress::before {
+            content: '';
+            position: absolute;
+            top: 0; bottom: 0;
+            width: 38%;
+            border-radius: 999px;
+            background: linear-gradient(90deg, #14b8a6, #0f766e, #14b8a6);
+            box-shadow: 0 0 8px rgba(20,184,166,.55);
+            animation: wmsProgress 1.05s ease-in-out infinite;
+        }
+        @keyframes wmsProgress {
+            0%   { transform: translateX(-110%); }
+            100% { transform: translateX(365%); }
+        }
+        @media (prefers-reduced-motion: reduce) {
+            .wms-progress::before { animation-duration: 2s; }
+        }
+        /* Splash kecil saat halaman dibuka (full load). */
+        .wms-boot {
+            position: fixed;
+            top: 0; right: 0; bottom: 0; left: 0;
+            z-index: 9998;
+            display: grid;
+            place-items: center;
+            background: #f6f9f8;
+            opacity: 1;
+            transition: opacity .22s ease;
+        }
+        .wms-boot.off { opacity: 0; pointer-events: none; }
+        .wms-boot span {
+            width: 28px; height: 28px;
+            border-radius: 50%;
+            border: 3px solid #d7e9e3;
+            border-top-color: #0f766e;
+            animation: wmsSpin .7s linear infinite;
+        }
+        @keyframes wmsSpin { to { transform: rotate(360deg); } }
+        @media (prefers-reduced-motion: reduce) {
+            .wms-boot span { animation-duration: 1.6s; }
+        }
         .notif-list { max-height: min(62vh, 380px); overflow: auto; }
         .notif-item {
             display: flex; align-items: flex-start; gap: 10px;
@@ -377,9 +440,501 @@
             main { padding: 16px 12px 32px; }
         }
     </style>
+    <link rel="stylesheet" href="{{ asset('vendor/sweetalert2/sweetalert2.min.css') }}">
     @stack('styles')
+    <script src="{{ asset('vendor/sweetalert2/sweetalert2.all.min.js') }}"></script>
+    <script>
+    /* Mesin live WMS: nav/submit tanpa reload, toast SweetAlert, suara notifikasi. */
+    (function () {
+        if (window.Wms) { return; }
+
+        var POLL_MS = 30000;
+        var hooks = [];
+        var bound = {};
+        var busy = false;
+        var polling = false;
+        var dirty = false;
+        var audioCtx = null;
+        var toastMixin = null;
+
+        function mainEl() { return document.getElementById('wmsContent'); }
+        function hasSwal() { return typeof window.Swal !== 'undefined'; }
+
+        var progressEl = null;
+        var progressTimer = null;
+        var progressCount = 0;
+
+        function progressStart() {
+            if (!progressEl) { progressEl = document.getElementById('wmsProgress'); }
+            if (!progressEl) { return; }
+            progressCount++;
+            if (progressCount > 1) { return; }
+            progressTimer = window.setTimeout(function () { progressEl.classList.add('on'); }, 90);
+        }
+        function progressStop() {
+            if (progressCount > 0) { progressCount--; }
+            if (progressCount > 0) { return; }
+            window.clearTimeout(progressTimer);
+            if (!progressEl) { progressEl = document.getElementById('wmsProgress'); }
+            if (progressEl) { progressEl.classList.remove('on'); }
+        }
+
+        function hideBoot() {
+            var el = document.getElementById('wmsBoot');
+            if (!el || el.classList.contains('off')) { return; }
+            el.classList.add('off');
+            window.setTimeout(function () {
+                if (el.parentNode) { el.parentNode.removeChild(el); }
+            }, 260);
+        }
+        window.setTimeout(hideBoot, 6000);
+
+        function soundEnabled() {
+            try { return window.localStorage.getItem('wms_sound') !== 'off'; } catch (e) { return true; }
+        }
+        function updateSoundButton() {
+            var btn = document.getElementById('notifSoundBtn');
+            if (!btn) { return; }
+            var on = soundEnabled();
+            btn.classList.toggle('muted', !on);
+            btn.setAttribute('aria-pressed', on ? 'true' : 'false');
+            btn.setAttribute('title', on ? 'Matikan suara notifikasi' : 'Nyalakan suara notifikasi');
+        }
+
+        function ensureAudio() {
+            var AC = window.AudioContext || window.webkitAudioContext;
+            if (!AC) { return null; }
+            if (!audioCtx) { audioCtx = new AC(); }
+            if (audioCtx.state === 'suspended') { audioCtx.resume(); }
+            return audioCtx;
+        }
+
+        /* Nada singkat ~0,22 detik, bukan alarm panjang. */
+        function notifSound() {
+            if (!soundEnabled()) { return; }
+            var ctx = ensureAudio();
+            if (!ctx) { return; }
+            var t0 = ctx.currentTime + 0.01;
+            [[880, 0, 0.09], [1245, 0.11, 0.09]].forEach(function (note) {
+                var osc = ctx.createOscillator();
+                var gain = ctx.createGain();
+                osc.type = 'sine';
+                osc.frequency.value = note[0];
+                gain.gain.setValueAtTime(0.0001, t0 + note[1]);
+                gain.gain.exponentialRampToValueAtTime(0.18, t0 + note[1] + 0.012);
+                gain.gain.exponentialRampToValueAtTime(0.0001, t0 + note[1] + note[2]);
+                osc.connect(gain);
+                gain.connect(ctx.destination);
+                osc.start(t0 + note[1]);
+                osc.stop(t0 + note[1] + note[2] + 0.02);
+            });
+        }
+
+        function toast(type, message) {
+            if (!hasSwal() || !message) { return; }
+            if (!toastMixin) {
+                toastMixin = Swal.mixin({
+                    toast: true,
+                    position: 'top-end',
+                    showConfirmButton: false,
+                    timer: 3200,
+                    timerProgressBar: true,
+                    didOpen: function (el) {
+                        el.addEventListener('mouseenter', Swal.stopTimer);
+                        el.addEventListener('mouseleave', Swal.resumeTimer);
+                    }
+                });
+            }
+            toastMixin.fire({ icon: type || 'success', title: message });
+        }
+
+        function confirmAction(options) {
+            var opts = typeof options === 'string' ? { text: options } : (options || {});
+            if (!hasSwal()) {
+                return Promise.resolve(window.confirm(opts.text || 'Lanjutkan?'));
+            }
+            return Swal.fire({
+                title: opts.title || 'Konfirmasi',
+                text: opts.text || '',
+                icon: opts.icon || 'question',
+                showCancelButton: true,
+                confirmButtonText: opts.confirmText || 'Ya, lanjutkan',
+                cancelButtonText: 'Batal',
+                reverseButtons: true,
+                focusCancel: true,
+                confirmButtonColor: '#0f766e',
+                cancelButtonColor: '#94a3b8'
+            }).then(function (result) { return !!result.isConfirmed; });
+        }
+
+        function alertAction(message, title, icon) {
+            if (!hasSwal()) { window.alert(message); return; }
+            Swal.fire({
+                title: title || 'Perhatian',
+                text: message,
+                icon: icon || 'warning',
+                confirmButtonText: 'Mengerti',
+                confirmButtonColor: '#0f766e'
+            });
+        }
+
+        function bindOnce(key, fn) {
+            if (bound[key]) { return; }
+            bound[key] = true;
+            try { fn(); } catch (e) { /* halaman tanpa elemen terkait */ }
+        }
+
+        function runHooks() {
+            var main = mainEl();
+            if (!main) { return; }
+            var list = hooks.slice();
+            hooks.length = 0;
+            list.forEach(function (fn) {
+                try { fn(main); } catch (e) { /* abaikan hook halaman yang tidak cocok */ }
+            });
+        }
+
+        function activateScripts(root) {
+            Array.prototype.slice.call(root.querySelectorAll('script')).forEach(function (old) {
+                var script = document.createElement('script');
+                Array.prototype.forEach.call(old.attributes, function (attr) {
+                    script.setAttribute(attr.name, attr.value);
+                });
+                script.text = old.text;
+                old.parentNode.replaceChild(script, old);
+            });
+        }
+
+        var lastFlash = { text: '', at: 0 };
+        function flashToast(type, message) {
+            var text = (message || '').replace(/\s+/g, ' ').trim();
+            if (!text) { return; }
+            var now = Date.now();
+            if (text === lastFlash.text && now - lastFlash.at < 1500) { return; }
+            lastFlash = { text: text, at: now };
+            toast(type, text);
+        }
+
+        function handleFlash(main) {
+            Array.prototype.slice.call(main.querySelectorAll('[data-flash]')).forEach(function (node) {
+                var type = node.getAttribute('data-flash') === 'ok' ? 'success' : 'error';
+                flashToast(type, node.textContent);
+                node.parentNode.removeChild(node);
+            });
+        }
+
+        function syncNav() {
+            var nav = document.querySelector('.mainnav');
+            if (!nav) { return; }
+            var path = (location.pathname.replace(/\/+$/, '') || '/');
+            var items = Array.prototype.slice.call(nav.querySelectorAll('.navdrop-item'));
+            var best = null;
+            var bestLen = -1;
+            items.forEach(function (link) {
+                var target = new URL(link.href, location.href).pathname.replace(/\/+$/, '');
+                if ((path === target || path.indexOf(target + '/') === 0) && target.length > bestLen) {
+                    best = link;
+                    bestLen = target.length;
+                }
+            });
+            items.forEach(function (link) { link.classList.toggle('active', link === best); });
+            Array.prototype.forEach.call(nav.querySelectorAll('.navdrop'), function (drop) {
+                var active = !!drop.querySelector('.navdrop-item.active');
+                var toggle = drop.querySelector('.navdrop-toggle');
+                if (toggle) { toggle.classList.toggle('active', active); }
+            });
+            var home = nav.querySelector('a.navlink[href]');
+            if (home) { home.classList.toggle('active', path === '/'); }
+        }
+
+        /* CSS tiap halaman ada di <head> (push styles). Saat konten ditukar,
+           blok style halaman lama harus diganti blok style halaman baru. */
+        function syncPageStyles(doc) {
+            Array.prototype.forEach.call(document.head.querySelectorAll('style[data-wms-page]'), function (node) {
+                node.parentNode.removeChild(node);
+            });
+            if (!doc) { return; }
+            Array.prototype.forEach.call(doc.head.querySelectorAll('style'), function (old) {
+                if (old.id === 'wmsBaseStyle') { return; }
+                var style = document.createElement('style');
+                style.setAttribute('data-wms-page', '1');
+                style.textContent = old.textContent;
+                document.head.appendChild(style);
+            });
+        }
+
+        function markPageStyles() {
+            Array.prototype.forEach.call(document.head.querySelectorAll('style'), function (node) {
+                if (node.id !== 'wmsBaseStyle') { node.setAttribute('data-wms-page', '1'); }
+            });
+        }
+
+        function swapFrom(html, url, mode) {
+            var doc = new DOMParser().parseFromString(html, 'text/html');
+            var fresh = doc.getElementById('wmsContent');
+            var main = mainEl();
+            if (!fresh || !main) { window.location.href = url || location.href; return false; }
+
+            syncPageStyles(doc);
+            main.innerHTML = fresh.innerHTML;
+            hooks.length = 0;
+            document.body.style.overflow = '';
+            document.body.classList.remove('stock-modal-open');
+            activateScripts(main);
+
+            if (doc.title) {
+                document.title = doc.title;
+                document.dispatchEvent(new CustomEvent('wms:swapped', { detail: { title: doc.title } }));
+            }
+            if (url) {
+                if (mode === 'push') { history.pushState({ wms: true }, '', url); }
+                else if (mode === 'replace') { history.replaceState({ wms: true }, '', url); }
+            }
+            syncNav();
+            handleFlash(main);
+            dirty = false;
+            return true;
+        }
+
+        function fetchPage(url, silent) {
+            var main = mainEl();
+            if (main && !silent) { main.classList.add('wms-live-busy'); }
+            if (!silent) { progressStart(); }
+            function done() {
+                if (main) { main.classList.remove('wms-live-busy'); }
+                if (!silent) { progressStop(); }
+            }
+            return fetch(url, {
+                headers: { 'X-Requested-With': 'XMLHttpRequest', 'X-WMS-Live': '1', 'Accept': 'text/html' },
+                credentials: 'same-origin',
+                cache: 'no-store'
+            }).then(function (res) {
+                if (!res.ok) { throw new Error('HTTP ' + res.status); }
+                return res.text().then(function (html) {
+                    return { html: html, url: res.url || url };
+                });
+            }).then(function (out) {
+                done();
+                return out;
+            }, function (err) {
+                done();
+                throw err;
+            });
+        }
+
+        function navigate(url, mode) {
+            if (busy) { return; }
+            busy = true;
+            fetchPage(url, false).then(function (out) {
+                swapFrom(out.html, out.url, mode);
+            }).catch(function () {
+                window.location.href = url;
+            }).then(function () { busy = false; });
+        }
+
+        function isDirty() {
+            if (dirty) { return true; }
+            var main = mainEl();
+            if (!main) { return true; }
+            if (document.querySelector('.qc-modal.open, #stock-modal.open')) { return true; }
+            var active = document.activeElement;
+            if (active && main.contains(active) && /^(INPUT|SELECT|TEXTAREA)$/.test(active.tagName)) { return true; }
+            var files = main.querySelectorAll('input[type="file"]');
+            for (var i = 0; i < files.length; i++) {
+                if (files[i].files && files[i].files.length) { return true; }
+            }
+            // Checklist yang dicentang lewat tombol (tanpa event change) juga harus aman.
+            if (main.querySelector('input[type="checkbox"]:checked, input[type="radio"]:checked')) { return true; }
+            return false;
+        }
+
+        function poll() {
+            if (document.hidden || busy || polling || !mainEl() || isDirty()) { return; }
+            polling = true;
+            fetchPage(location.href, true).then(function (out) {
+                var doc = new DOMParser().parseFromString(out.html, 'text/html');
+                var fresh = doc.getElementById('wmsContent');
+                var main = mainEl();
+                if (!fresh || !main || fresh.innerHTML === main.innerHTML) { return; }
+                swapFrom(out.html, location.href, 'none');
+            }).catch(function () { /* polling diam saat koneksi putus */ })
+              .then(function () { polling = false; });
+        }
+
+        function serializeForm(form, action) {
+            var data = new FormData(form);
+            var params = new URLSearchParams();
+            data.forEach(function (value, key) {
+                if (value !== '' && value !== null) { params.append(key, value); }
+            });
+            var base = action.split('#')[0];
+            return base + (base.indexOf('?') === -1 ? '?' : '&') + params.toString();
+        }
+
+        function submitLive(form) {
+            if (busy) { return; }
+            var method = (form.getAttribute('method') || 'GET').toUpperCase();
+            var action = form.getAttribute('action') || location.href;
+            var submit = form.querySelector('[type="submit"]');
+            var restore = null;
+            if (submit) {
+                restore = { html: submit.innerHTML, disabled: submit.disabled };
+                submit.disabled = true;
+                submit.textContent = 'Memproses…';
+            }
+
+            busy = true;
+            var main = mainEl();
+            if (main) { main.classList.add('wms-live-busy'); }
+            progressStart();
+
+            var request;
+            if (method === 'GET') {
+                request = fetch(serializeForm(form, action), {
+                    headers: { 'X-Requested-With': 'XMLHttpRequest', 'Accept': 'text/html' },
+                    credentials: 'same-origin'
+                });
+            } else {
+                request = fetch(action, {
+                    method: 'POST',
+                    body: new FormData(form),
+                    headers: { 'X-Requested-With': 'XMLHttpRequest', 'X-WMS-Live': '1', 'Accept': 'text/html' },
+                    credentials: 'same-origin'
+                });
+            }
+
+            request.then(function (res) {
+                if (!res.ok) { throw new Error('HTTP ' + res.status); }
+                return res.text().then(function (html) {
+                    return { html: html, url: res.url || action };
+                });
+            }).then(function (out) {
+                if (main) { main.classList.remove('wms-live-busy'); }
+                progressStop();
+                swapFrom(out.html, out.url, method === 'GET' ? 'push' : 'replace');
+            }).catch(function () {
+                if (main) { main.classList.remove('wms-live-busy'); }
+                progressStop();
+                if (restore) { submit.innerHTML = restore.html; submit.disabled = restore.disabled; }
+                toast('error', 'Aksi belum berhasil diproses. Halaman dimuat ulang.');
+                window.setTimeout(function () { form.submit(); }, 900);
+            }).then(function () { busy = false; });
+        }
+
+        window.Wms = {
+            toast: toast,
+            alert: alertAction,
+            confirm: confirmAction,
+            notifSound: notifSound,
+            soundEnabled: soundEnabled,
+            bindOnce: bindOnce,
+            onSwap: function (fn) {
+                hooks.push(fn);
+                var main = mainEl();
+                if (main && document.readyState !== 'loading') {
+                    try { fn(main); } catch (e) { /* hook opsional */ }
+                }
+            },
+            refresh: function () { poll(); },
+            navigate: function (url) { navigate(url, 'push'); }
+        };
+
+        /* Navigasi <a> di dalam konten tanpa reload. */
+        document.addEventListener('click', function (event) {
+            if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) { return; }
+            var link = event.target.closest ? event.target.closest('a[href]') : null;
+            if (!link) { return; }
+            if (link.hasAttribute('data-native')) { return; }
+            var main = mainEl();
+            if (!main || !link.closest('main, .topbar')) { return; }
+            if (link.target && link.target !== '_self') { return; }
+            if (link.hasAttribute('download')) { return; }
+            var href = link.getAttribute('href');
+            if (!href || href.charAt(0) === '#' || /^(javascript|mailto|tel):/i.test(href)) { return; }
+            var url = new URL(link.href, location.href);
+            if (url.origin !== location.origin) { return; }
+            event.preventDefault();
+            navigate(url.href, 'push');
+        });
+
+        /* Submit form: GET filter & POST aksi, semuanya tanpa reload. */
+        document.addEventListener('submit', function (event) {
+            var form = event.target;
+            if (!form || form.tagName !== 'FORM' || event.defaultPrevented) { return; }
+
+            if (!form.closest('main')) {
+                if (form.closest('#notifWrap')) {
+                    event.preventDefault();
+                    fetch(form.action, {
+                        method: 'POST',
+                        body: new FormData(form),
+                        headers: { 'X-Requested-With': 'XMLHttpRequest' },
+                        credentials: 'same-origin'
+                    }).then(function (res) { return res.text(); }).then(function (html) {
+                        var doc = new DOMParser().parseFromString(html, 'text/html');
+                        var flashes = doc.querySelectorAll('[data-flash]');
+                        if (flashes.length) {
+                            Array.prototype.forEach.call(flashes, function (node) {
+                                flashToast(node.getAttribute('data-flash') === 'ok' ? 'success' : 'error', node.textContent);
+                            });
+                        }
+                        document.dispatchEvent(new CustomEvent('wms:notif-refresh'));
+                    }).catch(function () { form.submit(); });
+                }
+                return;
+            }
+
+            event.preventDefault();
+            var message = form.getAttribute('data-confirm');
+            if (message) {
+                confirmAction({ text: message }).then(function (ok) { if (ok) { submitLive(form); } });
+            } else {
+                submitLive(form);
+            }
+        });
+
+        document.addEventListener('input', function (event) {
+            var main = mainEl();
+            if (main && main.contains(event.target)) { dirty = true; }
+        }, true);
+        document.addEventListener('change', function (event) {
+            var main = mainEl();
+            if (main && main.contains(event.target)) { dirty = true; }
+        }, true);
+
+        window.addEventListener('popstate', function () { navigate(location.href, 'none'); });
+        document.addEventListener('visibilitychange', function () { if (!document.hidden) { poll(); } });
+        document.addEventListener('DOMContentLoaded', function () {
+            hideBoot();
+            markPageStyles();
+            var boot = mainEl();
+            if (boot) { handleFlash(boot); }
+            syncNav();
+            runHooks();
+            updateSoundButton();
+            var btn = document.getElementById('notifSoundBtn');
+            if (btn) {
+                btn.addEventListener('click', function (event) {
+                    event.stopPropagation();
+                    try {
+                        window.localStorage.setItem('wms_sound', soundEnabled() ? 'off' : 'on');
+                    } catch (e) { /* mode privat */ }
+                    updateSoundButton();
+                    if (soundEnabled()) { notifSound(); }
+                });
+            }
+            window.setInterval(poll, POLL_MS);
+        });
+
+        document.addEventListener('click', function () { ensureAudio(); }, { once: true });
+        document.addEventListener('keydown', function () { ensureAudio(); }, { once: true });
+    })();
+    </script>
 </head>
 <body>
+    <div class="wms-boot" id="wmsBoot" aria-hidden="true"><span></span></div>
+    <noscript><style>#wmsBoot{display:none}</style></noscript>
+    <div class="wms-progress" id="wmsProgress" aria-hidden="true"></div>
     <header class="topbar">
         <div class="topbar-inner">
             <a href="{{ route('dashboard') }}" class="brand">
@@ -463,7 +1018,15 @@
                                 <b>Notifikasi</b>
                                 <small id="notifSub">Memuat…</small>
                             </div>
-                            <a href="{{ route('notifications') }}">Lihat semua</a>
+                            <div class="notif-head-actions">
+                                <button type="button" class="notif-sound" id="notifSoundBtn"
+                                        aria-pressed="true" title="Matikan suara notifikasi">
+                                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                                        <path d="M11 5L6 9H2v6h4l5 4V5z"/><path d="M15.5 8.5a5 5 0 0 1 0 7"/><path d="M18.5 5.5a9 9 0 0 1 0 13"/>
+                                    </svg>
+                                </button>
+                                <a href="{{ route('notifications') }}">Lihat semua</a>
+                            </div>
                         </div>
                         <div class="notif-list" id="notifList">
                             <div class="notif-empty">Memuat notifikasi…</div>
@@ -486,15 +1049,17 @@
                 </div>
                 {{-- Tombol kembali hanya untuk akun overtake (33). --}}
                 @if(!empty($wu['is_overtake']))
-                    <a href="{{ config('wms.trans_url') }}" class="btn btn-outline">Kembali ke Trans</a>
+                    <a href="{{ config('wms.trans_url') }}" class="btn btn-outline" data-native>Kembali ke Trans</a>
                 @endif
-                <a href="{{ route('logout') }}" class="btn btn-teal">Keluar</a>
+                <a href="{{ route('logout') }}" class="btn btn-teal" data-native>Keluar</a>
             </div>
             @endif
         </div>
     </header>
 
-    <main>
+    <main id="wmsContent">
+        @if(session('ok'))<div data-flash="ok" hidden>{{ session('ok') }}</div>@endif
+        @if(session('error'))<div data-flash="err" hidden>{{ session('error') }}</div>@endif
         @yield('content')
     </main>
 
@@ -515,10 +1080,11 @@
         var FEED  = wrap.getAttribute('data-feed');
         var READ  = wrap.getAttribute('data-read');
         var INDEX = wrap.getAttribute('data-index');
-        var POLL_MS = 60000;
+        var POLL_MS = 30000;
         var CLOCK_MS = 30000;
         var lastUnread = 0;
         var lastData = null;
+        var firstLoad = true;
         var timer = null;
         var clock = null;
         var baseTitle = document.title;
@@ -640,9 +1206,11 @@
 
             document.title = unread > 0 ? '(' + unread + ') ' + baseTitle : baseTitle;
 
-            if (unread > lastUnread && lastUnread >= 0) {
+            if (!firstLoad && unread > lastUnread) {
+                if (window.Wms && window.Wms.notifSound) { window.Wms.notifSound(); }
                 sr.textContent = unread + ' notifikasi belum dibaca.';
             }
+            firstLoad = false;
             lastUnread = unread;
             lastData = data;
         }
@@ -719,6 +1287,13 @@
             if (document.visibilityState === 'visible') load();
         });
         window.addEventListener('focus', load);
+        document.addEventListener('wms:notif-refresh', load);
+        document.addEventListener('wms:swapped', function (event) {
+            baseTitle = (event.detail && event.detail.title) || document.title;
+            if (lastUnread > 0) {
+                document.title = '(' + lastUnread + ') ' + baseTitle;
+            }
+        });
 
         load();
         startPolling();
@@ -752,6 +1327,11 @@
         });
 
         document.addEventListener('click', function (event) {
+            // Pilih submenu: tutup dropdown walau halaman tidak di-reload.
+            if (event.target.closest && event.target.closest('.navdrop-item')) {
+                drops.forEach(close);
+                return;
+            }
             drops.forEach(function (drop) {
                 if (!drop.contains(event.target)) close(drop);
             });

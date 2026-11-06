@@ -213,7 +213,7 @@
                                                class="btn-reset" style="padding:4px 10px;min-height:0;font-size:11px;">Detail</a>
                                             @if($row['status'] === 'ACTIVE' && !empty($perms['can_approve']))
                                                 <form method="POST" action="{{ route('komplain.acc', ['id' => $row['id']]) }}"
-                                                      onsubmit="if (!confirm('ACC komplain {{ $row['code'] }}? Stok akan masuk ke gudang QC.')) { return false; } this.querySelector('button').disabled = true; return true;">
+                                                      data-confirm="ACC komplain {{ $row['code'] }}? Stok akan masuk ke gudang QC.">
                                                     @csrf
                                                     <input type="hidden" name="from" value="{{ $fromQuery }}">
                                                     <button type="submit" class="mini-btn primary" title="ACC">ACC</button>
