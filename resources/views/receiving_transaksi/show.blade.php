@@ -289,7 +289,7 @@
                                 <div class="qc-log">
                                     <span class="qty">{{ $num($log['qty']) }}</span>
                                     <span class="status {{ $log['status'] === 'OK' ? 'ok' : 'not' }}">{{ $log['status'] }}</span>
-                                    @if(!empty($data['can_update']))
+                                    @if(!empty($data['can_delete']))
                                         <form method="POST" action="{{ route('receiving_transaksi.qc_delete', ['id' => $header['id'], 'detailId' => $detail['id'], 'logId' => $log['id']]) }}"
                                               onsubmit="if (!confirm('Hapus log QC {{ $num($log['qty']) }}?')) { return false; } this.querySelector('button').disabled = true; return true;"
                                               style="margin-left:auto;">
@@ -337,7 +337,7 @@
                                 <th class="num">QC</th>
                                 <th>No Batch</th>
                                 <th>Catatan</th>
-                                @if($status === 'ACTIVE' && !empty($data['can_update']))
+                                @if($status === 'ACTIVE' && !empty($data['can_delete']))
                                     <th style="width: 70px;">Aksi</th>
                                 @endif
                             </tr>
@@ -356,7 +356,7 @@
                                     <td class="num">{{ $num($detail['qc_total']) }}</td>
                                     <td class="cell-muted">{{ $detail['batch'] !== '' ? $detail['batch'] : '-' }}</td>
                                     <td class="cell-muted">{{ $detail['note'] !== '' ? $detail['note'] : '-' }}</td>
-                                    @if($status === 'ACTIVE' && !empty($data['can_update']))
+                                    @if($status === 'ACTIVE' && !empty($data['can_delete']))
                                         <td>
                                             <form method="POST" action="{{ route('receiving_transaksi.detail_delete', ['id' => $header['id'], 'detailId' => $detail['id']]) }}"
                                                   onsubmit="if (!confirm('Hapus produk {{ $detail['product'] }} dari penerimaan?')) { return false; } this.querySelector('button').disabled = true; return true;">

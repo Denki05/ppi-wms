@@ -455,7 +455,7 @@
                                                     <button type="submit" class="mini-btn primary" title="Approve QC saleable">Approve</button>
                                                 </form>
                                             @endif
-                                            @if(!($log['is_sellable'] && $log['is_approved']) && !empty($data['can_qc']))
+                                            @if(!($log['is_sellable'] && $log['is_approved']) && !empty($data['can_delete_qc']))
                                                 <form method="POST" action="{{ route('receiving.qc_delete', ['id' => $header['id'], 'detailId' => $row['id'], 'logId' => $log['id']]) }}"
                                                       onsubmit="if (!confirm('Hapus log QC {{ $num($log['qty']) }}?')) { return false; } this.querySelector('button').disabled = true; return true;">
                                                     @csrf
