@@ -213,14 +213,6 @@
                                         <div class="cell-actions">
                                             <a href="{{ route('receiving_transaksi.show', ['id' => $row['id'], 'from' => $fromQuery]) }}"
                                                class="btn-reset" style="padding:4px 10px;min-height:0;font-size:11px;">Detail</a>
-                                            @if($row['status'] === 'READY' && !empty($perms['can_approve']))
-                                                <form method="POST" action="{{ route('receiving_transaksi.acc', ['id' => $row['id']]) }}"
-                                                      onsubmit="if (!confirm('ACC {{ $row['code'] }}? Stok retur akan masuk ke gudang QC.')) { return false; } this.querySelector('button').disabled = true; return true;">
-                                                    @csrf
-                                                    <input type="hidden" name="from" value="{{ $fromQuery }}">
-                                                    <button type="submit" class="mini-btn primary" title="ACC">ACC</button>
-                                                </form>
-                                            @endif
                                         </div>
                                     </td>
                                 </tr>

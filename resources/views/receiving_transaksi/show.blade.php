@@ -165,7 +165,7 @@
                 @elseif($status === 'QC')
                     <div class="note"><b>Proses QC.</b> Catat hasil QC per produk, lalu publish to Ready.</div>
                 @elseif($status === 'READY')
-                    <div class="note"><b>Menunggu ACC.</b> Stok retur akan masuk ke gudang QC setelah di-ACC.</div>
+                    <div class="note"><b>Menunggu ACC di modul Trans.</b> Stok retur akan masuk setelah Admin melakukan ACC pada Receiving di Trans.</div>
                 @else
                     <div class="note">Transaksi sudah final. Surat jalan bisa diunduh bila tersedia.</div>
                 @endif
@@ -180,18 +180,6 @@
                         <button type="submit" class="btn-acc">
                             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"/></svg>
                             {{ $status === 'ACTIVE' ? 'Publish ke QC' : 'Publish to Ready' }}
-                        </button>
-                    </form>
-                @endif
-
-                @if(!empty($data['can_acc']))
-                    <form method="POST" action="{{ route('receiving_transaksi.acc', ['id' => $header['id']]) }}"
-                          onsubmit="if (!confirm('ACC {{ $header['code'] }}? Stok retur akan masuk ke gudang QC.')) { return false; } this.querySelector('button').disabled = true; return true;">
-                        @csrf
-                        <input type="hidden" name="from" value="{{ $fromQuery }}">
-                        <button type="submit" class="btn-acc">
-                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"/></svg>
-                            ACC
                         </button>
                     </form>
                 @endif

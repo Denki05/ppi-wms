@@ -279,12 +279,8 @@
                     @elseif($qcPendingApproval)
                         <div class="note warn">Masih ada log QC Saleable yang belum di-approve. Approve dulu agar Publish to Ready tidak ditolak.</div>
                     @endif
-                @elseif($status === 'READY' && !empty($data['can_acc']))
-                    <div class="note">
-                        <b>Siap di-ACC.</b> Stok akan masuk ke {{ $header['warehouse'] }} dan pemakaian PO dipotong sesuai qty QC. Tindakan ini tidak bisa dibatalkan.
-                    </div>
-                @elseif($status === 'READY' && !empty($data['acc_blocked']))
-                    <div class="note warn">{{ $data['acc_blocked'] }}</div>
+                @elseif($status === 'READY')
+                    <div class="note"><b>Menunggu ACC di modul Trans.</b> Stok akan masuk setelah Admin melakukan ACC pada Receiving di Trans.</div>
                 @else
                     <div class="note">Penerimaan sudah final dan tidak bisa diubah lagi.</div>
                 @endif
@@ -337,18 +333,6 @@
                         <button type="submit" class="btn-line">
                             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 3-6.7"/><path d="M3 4v5h5"/></svg>
                             Kembalikan ke QC
-                        </button>
-                    </form>
-                @endif
-
-                @if(!empty($data['can_acc']))
-                    <form method="POST" action="{{ route('receiving.acc', ['id' => $header['id']]) }}"
-                          onsubmit="if (!confirm('ACC penerimaan {{ $header['code'] }}? Stok akan ditambahkan dan PO dipotong. Tindakan ini tidak bisa dibatalkan.')) { return false; } this.querySelector('button').disabled = true; this.querySelector('button').textContent = 'Memproses...'; return true;">
-                        @csrf
-                        <input type="hidden" name="from" value="{{ $fromQuery }}">
-                        <button type="submit" class="btn-acc">
-                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"/></svg>
-                            ACC Penerimaan
                         </button>
                     </form>
                 @endif

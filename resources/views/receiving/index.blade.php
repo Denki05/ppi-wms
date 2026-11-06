@@ -249,14 +249,6 @@
                                                     <button type="submit" class="mini-btn ghost" title="Kembalikan ke Active">Batal</button>
                                                 </form>
                                             @endif
-                                            @if($row['status'] === 'READY' && !empty($perms['can_approve']))
-                                                <form method="POST" action="{{ route('receiving.acc', ['id' => $row['id']]) }}"
-                                                      onsubmit="if (!confirm('ACC penerimaan {{ $row['code'] }}? Stok akan ditambahkan dan PO dipotong.')) { return false; } this.querySelector('button').disabled = true; return true;">
-                                                    @csrf
-                                                    <input type="hidden" name="from" value="{{ $fromQuery }}">
-                                                    <button type="submit" class="mini-btn primary" title="ACC penerimaan">ACC</button>
-                                                </form>
-                                            @endif
                                         </div>
                                     </td>
                                 </tr>
