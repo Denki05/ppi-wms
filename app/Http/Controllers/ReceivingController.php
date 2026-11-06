@@ -116,6 +116,73 @@ class ReceivingController extends Controller
         return $this->backToDetail($id, $result, 'Rollback penerimaan gagal.');
     }
 
+    /**
+     * Simpan satu log QC penerimaan (hanya saat status QC).
+     */
+    public function storeQc(Request $request, $id, $detailId)
+    {
+        $validator = \Validator::make($request->all(), [
+            'qty_qc'      => 'required|numeric|min:0.1',
+            'status_qc'   => 'required|in:OK,NOT OK,Not OK',
+            'is_sellable' => 'nullable|boolean',
+        ]);
+
+        if ($validator->fails()) {
+            return redirect()
+                ->route('receiving.show', ['id' => (int) $id])
+                ->with('error', implode(' ', $validator->errors()->all()));
+        }
+
+        $result = (new TransApiClient)->storeReceivingQc(session('wms.token'), $id, $detailId, [
+            'qty_qc'      => (float) $request->input('qty_qc'),
+            'status_qc'   => strtoupper($request->input('status_qc')),
+            'is_sellable' => $request->boolean('is_sellable') ? 1 : 0,
+        ]);
+
+        return $this->backToDetail($id, $result, 'Simpan QC gagal.');
+    }
+
+    public function approveQc(Request $request, $id, $detailId, $logId)
+    {
+        $result = (new TransApiClient)->approveReceivingQc(
+            session('wms.token'),
+            $id,
+            $detailId,
+            $logId,
+            $this->qcLogFields($request)
+        );
+
+        return $this->backToDetail($id, $result, 'Approve QC gagal.');
+    }
+
+    public function deleteQc(Request $request, $id, $detailId, $logId)
+    {
+        $result = (new TransApiClient)->deleteReceivingQc(
+            session('wms.token'),
+            $id,
+            $detailId,
+            $logId,
+            $this->qcLogFields($request)
+        );
+
+        return $this->backToDetail($id, $result, 'Hapus log QC gagal.');
+    }
+
+    /**
+     * Baris log QC lama di Trans bisa ber-id 0, jadi atribut baris ikut dikirim.
+     */
+    private function qcLogFields(Request $request)
+    {
+        return array_filter([
+            'qty_qc'      => $request->input('qty_qc'),
+            'status_qc'   => $request->input('status_qc'),
+            'is_sellable' => $request->input('is_sellable'),
+            'is_approved' => $request->input('is_approved'),
+        ], function ($value) {
+            return $value !== null && $value !== '';
+        });
+    }
+
     private function backToDetail($id, array $result, $fallback)
     {
         $params = ['id' => (int) $id];

@@ -120,6 +120,36 @@ class TransApiClient
         return $this->postJson($token, '/api/wms/receiving/' . (int) $id . '/rollback', [], 'Rollback penerimaan gagal.');
     }
 
+    public function storeReceivingQc($token, $id, $detailId, array $fields)
+    {
+        return $this->postJson(
+            $token,
+            '/api/wms/receiving/' . (int) $id . '/details/' . (int) $detailId . '/qc',
+            $fields,
+            'Simpan QC gagal.'
+        );
+    }
+
+    public function approveReceivingQc($token, $id, $detailId, $logId, array $fields = [])
+    {
+        return $this->postJson(
+            $token,
+            '/api/wms/receiving/' . (int) $id . '/details/' . (int) $detailId . '/qc/' . (int) $logId . '/approve',
+            $fields,
+            'Approve QC gagal.'
+        );
+    }
+
+    public function deleteReceivingQc($token, $id, $detailId, $logId, array $fields = [])
+    {
+        return $this->postJson(
+            $token,
+            '/api/wms/receiving/' . (int) $id . '/details/' . (int) $detailId . '/qc/' . (int) $logId . '/delete',
+            $fields,
+            'Hapus log QC gagal.'
+        );
+    }
+
     public function receivingTransaksi($token, array $query = [])
     {
         return $this->getJson($token, '/api/wms/receiving-transaksi', $query, 'Daftar Receiving - Transaksi belum bisa dimuat.');

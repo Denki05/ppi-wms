@@ -368,20 +368,6 @@
             color: #92400e;
             font-size: 12.5px;
         }
-        .error-box {
-            max-width: 520px;
-            margin: 60px auto;
-            background: #fff;
-            border: 1px solid #fecaca;
-            border-radius: 12px;
-            padding: 26px;
-            text-align: center;
-            box-shadow: 0 4px 16px rgba(15,23,42,.08);
-        }
-        .error-box h1 { margin: 0 0 8px; font-size: 18px; color: #b91c1c; }
-        .error-box p { color: #475569; font-size: 13px; margin: 0 0 18px; }
-        .error-box .btn { background: #0f766e; color: #fff; padding: 9px 16px; border-radius: 7px; }
-
         @media (max-width: 760px) {
             .topbar-inner { padding: 8px 12px; gap: 8px; }
             .mainnav { order: 3; flex: 1 0 100%; padding-top: 2px; }

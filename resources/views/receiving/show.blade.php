@@ -5,6 +5,129 @@
 @push('styles')
 @include('partials.list-styles')
 @include('partials.detail-styles')
+<style>
+    .qc-sum {
+        display: flex;
+        gap: 12px;
+        flex-wrap: wrap;
+        font-size: 11.5px;
+        color: #64748b;
+        margin-bottom: 10px;
+    }
+    .qc-sum b { color: #0f172a; font-variant-numeric: tabular-nums; }
+    .qc-modal {
+        position: fixed;
+        inset: 0;
+        z-index: 120;
+        display: none;
+    }
+    .qc-modal.open { display: block; }
+    .qc-modal-backdrop {
+        position: absolute;
+        inset: 0;
+        background: rgba(15, 23, 42, .45);
+    }
+    .qc-modal-dialog {
+        position: relative;
+        margin: 6vh auto;
+        width: calc(100% - 32px);
+        max-width: 620px;
+        max-height: 86vh;
+        overflow: auto;
+        background: #fff;
+        border-radius: 14px;
+        box-shadow: 0 24px 60px rgba(15, 23, 42, .28);
+    }
+    .qc-modal-head {
+        position: sticky;
+        top: 0;
+        z-index: 1;
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 10px;
+        padding: 14px 16px;
+        background: #fff;
+        border-bottom: 1px solid #eef2f7;
+    }
+    .qc-modal-head b { color: #0f172a; }
+    .qc-modal-head small { display: block; color: #64748b; margin-top: 2px; }
+    .qc-modal-close {
+        flex: none;
+        width: 30px;
+        height: 30px;
+        border: 1px solid #e2e8f0;
+        border-radius: 8px;
+        background: #fff;
+        color: #64748b;
+        font-size: 18px;
+        line-height: 1;
+        cursor: pointer;
+    }
+    .qc-modal-close:hover { background: #f8fafc; color: #0f172a; }
+    .qc-modal-body { padding: 14px 16px 16px; }
+    .btn-acc:disabled, .mini-btn:disabled {
+        opacity: .5;
+        cursor: not-allowed;
+    }
+    .qc-log {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        flex-wrap: wrap;
+        padding: 6px 0;
+        border-top: 1px dashed #e2e8f0;
+        font-size: 12px;
+    }
+    .qc-log .qty { font-weight: 700; font-variant-numeric: tabular-nums; min-width: 56px; }
+    .qc-log .status { font-weight: 700; }
+    .qc-log .status.ok { color: #15803d; }
+    .qc-log .status.not { color: #b91c1c; }
+    .qc-log .status.hold { color: #b45309; }
+    .qc-tag {
+        display: inline-block;
+        padding: 1px 7px;
+        border-radius: 999px;
+        font-size: 9.5px;
+        font-weight: 700;
+        letter-spacing: .3px;
+        text-transform: uppercase;
+        background: #eef2f7;
+        color: #475569;
+    }
+    .qc-tag.ok { background: #e8f7f1; color: #0f766e; }
+    .qc-tag.warn { background: #fff7e6; color: #b45309; }
+    .qc-log-actions { margin-left: auto; display: flex; gap: 6px; }
+    .qc-empty { padding: 6px 0; font-size: 12px; color: #94a3b8; border-top: 1px dashed #e2e8f0; }
+    .qc-form {
+        display: flex;
+        align-items: flex-end;
+        gap: 8px;
+        flex-wrap: wrap;
+        margin-top: 8px;
+        padding-top: 8px;
+        border-top: 1px dashed #e2e8f0;
+    }
+    .qc-form .field { display: flex; flex-direction: column; gap: 3px; }
+    .qc-form label { font-size: 10.5px; font-weight: 700; color: #64748b; text-transform: uppercase; letter-spacing: .4px; }
+    .qc-form input, .qc-form select {
+        border: 1px solid #d8e1dc;
+        border-radius: 8px;
+        padding: 7px 9px;
+        font-size: 12px;
+        min-height: 34px;
+    }
+    .qc-form input[type="number"] { width: 110px; }
+    .qc-check {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        min-height: 34px;
+        font-size: 12px;
+        font-weight: 600;
+        color: #475569;
+    }
+</style>
 @endpush
 
 @section('content')
@@ -21,6 +144,20 @@
             ? \Carbon\Carbon::parse($data['generated_at'])->setTimezone('Asia/Jakarta')->format('H:i')
             : null;
         $status = $header['status'] ?? '';
+        $qcIncomplete = false;
+        $qcPendingApproval = false;
+        if ($status === 'QC') {
+            foreach ($rows as $row) {
+                if ((float) $row['qc_total'] <= 0) {
+                    $qcIncomplete = true;
+                }
+                foreach ($row['qc_logs'] as $log) {
+                    if ($log['is_sellable'] && !$log['is_approved']) {
+                        $qcPendingApproval = true;
+                    }
+                }
+            }
+        }
     @endphp
 
     <a href="{{ $backUrl }}" class="back-link">
@@ -136,7 +273,12 @@
                 @if($status === 'ACTIVE')
                     <div class="note"><b>Draft penerimaan.</b> Publish ke QC setelah daftar produk siap diperiksa.</div>
                 @elseif($status === 'QC')
-                    <div class="note"><b>Proses QC.</b> Publish to Ready bila seluruh hasil QC sudah valid dan di-approve.</div>
+                    <div class="note"><b>Proses QC.</b> Catat hasil QC per produk; tandai <b>Saleable</b> bila layak jual, lalu Approve sebelum Publish to Ready.</div>
+                    @if($qcIncomplete)
+                        <div class="note warn">Masih ada produk tanpa log QC. Setiap produk wajib punya qty QC &gt; 0 sebelum Publish to Ready.</div>
+                    @elseif($qcPendingApproval)
+                        <div class="note warn">Masih ada log QC Saleable yang belum di-approve. Approve dulu agar Publish to Ready tidak ditolak.</div>
+                    @endif
                 @elseif($status === 'READY' && !empty($data['can_acc']))
                     <div class="note">
                         <b>Siap di-ACC.</b> Stok akan masuk ke {{ $header['warehouse'] }} dan pemakaian PO dipotong sesuai qty QC. Tindakan ini tidak bisa dibatalkan.
@@ -162,11 +304,13 @@
                 @endif
 
                 @if($status === 'QC' && !empty($data['can_publish']))
+                    @php($qcBlocked = $qcIncomplete || $qcPendingApproval)
                     <form method="POST" action="{{ route('receiving.publish', ['id' => $header['id']]) }}"
                           onsubmit="if (!confirm('Publish penerimaan {{ $header['code'] }} ke tahap Ready?')) { return false; } this.querySelector('button').disabled = true; return true;">
                         @csrf
                         <input type="hidden" name="from" value="{{ $fromQuery }}">
-                        <button type="submit" class="btn-acc">
+                        <button type="submit" class="btn-acc" {{ $qcBlocked ? 'disabled' : '' }}
+                                title="{{ $qcBlocked ? ($qcIncomplete ? 'Semua produk harus punya log QC lebih dulu.' : 'Approve semua log QC Saleable lebih dulu.') : '' }}">
                             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"/></svg>
                             Publish to Ready
                         </button>
@@ -228,6 +372,165 @@
                         <small>Penerimaan ini belum memiliki baris produk.</small>
                     </span>
                 </div>
+            @elseif($status === 'QC')
+                <div class="table-wrap">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th style="width: 44px;">No</th>
+                                <th>Produk</th>
+                                <th>Kemasan</th>
+                                <th class="num">Qty PO</th>
+                                <th class="num">QC OK</th>
+                                <th class="num">QC NOT OK</th>
+                                <th class="num">QC Disetujui</th>
+                                <th class="num">Sisa</th>
+                                <th>No Batch</th>
+                                <th class="num" style="width: 110px;">Aksi</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @foreach($rows as $row)
+                                <tr>
+                                    <td class="cell-muted">{{ $row['no'] }}</td>
+                                    <td class="cell-code">{{ $row['product'] }}</td>
+                                    <td class="cell-muted">{{ $row['pack'] }}</td>
+                                    <td class="num">{{ $num($row['qty_po']) }}</td>
+                                    <td class="num {{ (float) $row['qc_ok'] > 0 ? 'qc-ok' : 'zero' }}">{{ $num($row['qc_ok']) }}</td>
+                                    <td class="num {{ (float) $row['qc_not_ok'] > 0 ? 'qc-bad' : 'zero' }}">{{ $num($row['qc_not_ok']) }}</td>
+                                    <td class="num {{ (float) $row['qc_approved'] > 0 ? 'qc-ok' : 'zero' }}">{{ $num($row['qc_approved']) }}</td>
+                                    <td class="num {{ (float) $row['remaining'] > 0 ? '' : 'zero' }}">{{ $num($row['remaining']) }}</td>
+                                    <td class="cell-muted">{{ $row['batch'] !== '' ? $row['batch'] : '-' }}</td>
+                                    <td class="num">
+                                        <button type="button" class="mini-btn primary" data-qc-open="qc-modal-{{ $row['id'] }}">Proses QC</button>
+                                    </td>
+                                </tr>
+                            @endforeach
+                        </tbody>
+                    </table>
+                </div>
+
+                @foreach($rows as $row)
+                    <div class="qc-modal" id="qc-modal-{{ $row['id'] }}" aria-hidden="true">
+                        <div class="qc-modal-backdrop" data-qc-close></div>
+                        <div class="qc-modal-dialog" role="dialog" aria-modal="true" aria-labelledby="qc-modal-title-{{ $row['id'] }}">
+                            <div class="qc-modal-head">
+                                <div>
+                                    <b id="qc-modal-title-{{ $row['id'] }}">{{ $row['product'] }}</b>
+                                    <small>
+                                        {{ $row['pack'] }}@if($row['batch'] !== '') · batch {{ $row['batch'] }}@endif
+                                        @if($row['note'] !== '') · {{ $row['note'] }}@endif
+                                    </small>
+                                </div>
+                                <button type="button" class="qc-modal-close" data-qc-close aria-label="Tutup">&times;</button>
+                            </div>
+                            <div class="qc-modal-body">
+                                <div class="qc-sum">
+                                    <span>Qty PO <b>{{ $num($row['qty_po']) }}</b></span>
+                                    <span>QC <b>{{ $num($row['qc_total']) }}</b></span>
+                                    <span>Sisa <b>{{ $num($row['remaining']) }}</b></span>
+                                </div>
+
+                                @forelse($row['qc_logs'] as $log)
+                                    <div class="qc-log">
+                                        <span class="qty">{{ $num($log['qty']) }}</span>
+                                        <span class="status {{ $log['status'] === 'OK' ? 'ok' : ($log['status'] === 'HOLD' ? 'hold' : 'not') }}">{{ $log['status'] }}</span>
+                                        @if($log['is_sellable'])
+                                            <span class="qc-tag warn">Saleable</span>
+                                        @endif
+                                        @if($log['is_approved'])
+                                            <span class="qc-tag ok">Masuk stok</span>
+                                        @endif
+
+                                        <span class="qc-log-actions">
+                                            @if($log['status'] === 'OK' && $log['is_sellable'] && !$log['is_approved'] && !empty($data['can_approve_qc']))
+                                                <form method="POST" action="{{ route('receiving.qc_approve', ['id' => $header['id'], 'detailId' => $row['id'], 'logId' => $log['id']]) }}"
+                                                      onsubmit="if (!confirm('Approve QC {{ $num($log['qty']) }}? Stok akan masuk dan PO dipotong.')) { return false; } this.querySelector('button').disabled = true; return true;">
+                                                    @csrf
+                                                    <input type="hidden" name="from" value="{{ $fromQuery }}">
+                                                    <input type="hidden" name="qty_qc" value="{{ $log['qty'] }}">
+                                                    <input type="hidden" name="status_qc" value="{{ $log['status_code'] }}">
+                                                    <input type="hidden" name="is_sellable" value="{{ $log['is_sellable'] }}">
+                                                    <input type="hidden" name="is_approved" value="{{ $log['is_approved'] }}">
+                                                    <button type="submit" class="mini-btn primary" title="Approve QC saleable">Approve</button>
+                                                </form>
+                                            @endif
+                                            @if(!($log['is_sellable'] && $log['is_approved']) && !empty($data['can_qc']))
+                                                <form method="POST" action="{{ route('receiving.qc_delete', ['id' => $header['id'], 'detailId' => $row['id'], 'logId' => $log['id']]) }}"
+                                                      onsubmit="if (!confirm('Hapus log QC {{ $num($log['qty']) }}?')) { return false; } this.querySelector('button').disabled = true; return true;">
+                                                    @csrf
+                                                    <input type="hidden" name="from" value="{{ $fromQuery }}">
+                                                    <input type="hidden" name="qty_qc" value="{{ $log['qty'] }}">
+                                                    <input type="hidden" name="status_qc" value="{{ $log['status_code'] }}">
+                                                    <input type="hidden" name="is_sellable" value="{{ $log['is_sellable'] }}">
+                                                    <input type="hidden" name="is_approved" value="{{ $log['is_approved'] }}">
+                                                    <button type="submit" class="mini-btn ghost" title="Hapus log QC">Hapus</button>
+                                                </form>
+                                            @endif
+                                        </span>
+                                    </div>
+                                @empty
+                                    <div class="qc-empty" style="border-top: 0;">Belum ada log QC untuk produk ini.</div>
+                                @endforelse
+
+                                @if($row['remaining'] > 0 && !empty($data['can_qc']))
+                                    <form method="POST" action="{{ route('receiving.qc_store', ['id' => $header['id'], 'detailId' => $row['id']]) }}" class="qc-form">
+                                        @csrf
+                                        <input type="hidden" name="from" value="{{ $fromQuery }}">
+                                        <div class="field">
+                                            <label>Qty QC</label>
+                                            <input type="number" name="qty_qc" min="0.1" step="0.01" max="{{ $row['remaining'] }}" required>
+                                        </div>
+                                        <div class="field">
+                                            <label>Status</label>
+                                            <select name="status_qc" required>
+                                                <option value="OK">OK</option>
+                                                <option value="NOT OK">NOT OK</option>
+                                            </select>
+                                        </div>
+                                        <label class="qc-check" title="Tandai bila barang layak jual; wajib di-Approve sebelum Publish to Ready">
+                                            <input type="checkbox" name="is_sellable" value="1">
+                                            Saleable
+                                        </label>
+                                        <button type="submit" class="mini-btn primary" style="min-height:34px;">Simpan QC</button>
+                                    </form>
+                                @endif
+                            </div>
+                        </div>
+                    </div>
+                @endforeach
+
+                <script>
+                    (function () {
+                        document.querySelectorAll('[data-qc-open]').forEach(function (btn) {
+                            btn.addEventListener('click', function () {
+                                var modal = document.getElementById(btn.getAttribute('data-qc-open'));
+                                if (modal) {
+                                    modal.classList.add('open');
+                                    modal.setAttribute('aria-hidden', 'false');
+                                    document.body.style.overflow = 'hidden';
+                                }
+                            });
+                        });
+                        document.querySelectorAll('.qc-modal').forEach(function (modal) {
+                            modal.addEventListener('click', function (event) {
+                                if (event.target.closest('[data-qc-close]')) {
+                                    modal.classList.remove('open');
+                                    modal.setAttribute('aria-hidden', 'true');
+                                    document.body.style.overflow = '';
+                                }
+                            });
+                        });
+                        document.addEventListener('keydown', function (event) {
+                            if (event.key !== 'Escape') { return; }
+                            document.querySelectorAll('.qc-modal.open').forEach(function (modal) {
+                                modal.classList.remove('open');
+                                modal.setAttribute('aria-hidden', 'true');
+                            });
+                            document.body.style.overflow = '';
+                        });
+                    })();
+                </script>
             @else
                 <div class="table-wrap">
                     <table>

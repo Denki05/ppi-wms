@@ -39,6 +39,9 @@ Route::group(['middleware' => ['wms.session']], function () {
     Route::post('/m/receiving/{id}/publish', [ReceivingController::class, 'publish'])->where('id', '[0-9]+')->name('receiving.publish');
     Route::post('/m/receiving/{id}/cancel', [ReceivingController::class, 'cancel'])->where('id', '[0-9]+')->name('receiving.cancel');
     Route::post('/m/receiving/{id}/rollback', [ReceivingController::class, 'rollback'])->where('id', '[0-9]+')->name('receiving.rollback');
+    Route::post('/m/receiving/{id}/details/{detailId}/qc', [ReceivingController::class, 'storeQc'])->where('id', '[0-9]+')->where('detailId', '[0-9]+')->name('receiving.qc_store');
+    Route::post('/m/receiving/{id}/details/{detailId}/qc/{logId}/approve', [ReceivingController::class, 'approveQc'])->where('id', '[0-9]+')->where('detailId', '[0-9]+')->where('logId', '[0-9]+')->name('receiving.qc_approve');
+    Route::post('/m/receiving/{id}/details/{detailId}/qc/{logId}/delete', [ReceivingController::class, 'deleteQc'])->where('id', '[0-9]+')->where('detailId', '[0-9]+')->where('logId', '[0-9]+')->name('receiving.qc_delete');
     Route::get('/m/receiving-transaksi', [ReceivingTransaksiController::class, 'index'])->name('receiving_transaksi');
     Route::get('/m/receiving-transaksi/{id}', [ReceivingTransaksiController::class, 'show'])->where('id', '[0-9]+')->name('receiving_transaksi.show');
     Route::get('/m/receiving-transaksi/{id}/pdf', [ReceivingTransaksiController::class, 'pdf'])->where('id', '[0-9]+')->name('receiving_transaksi.pdf');
