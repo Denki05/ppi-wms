@@ -281,6 +281,7 @@
         $packagingOptions = $data['packaging_options'] ?? [];
         $selectedBrand = $filters['brand'] ?? '';
         $selectedPackaging = $filters['packaging'] ?? '';
+        $minusOnly = !empty($filters['minus']);
         $meta = $data['meta'] ?? ['page' => 1, 'last_page' => 1, 'total' => 0, 'per_page' => 25];
         $warehouseName = '';
         foreach ($warehouses as $warehouse) {
@@ -309,6 +310,9 @@
     </div>
 
     <form method="GET" action="{{ route('stock') }}" class="filters">
+        @if($minusOnly)
+            <input type="hidden" name="minus" value="1">
+        @endif
         <div class="field">
             <label for="warehouse_id">Gudang</label>
             <select id="warehouse_id" name="warehouse_id" onchange="this.form.submit()">
@@ -367,6 +371,15 @@
                 @endif
             </header>
 
+            @if($minusOnly)
+                <div style="display:flex; align-items:center; gap:8px; padding:10px 16px; background:#fffbeb; border-bottom:1px solid #fde68a; font-size:12px; color:#92400e;">
+                    <b>Hanya stok minus</b>
+                    <span>&middot;</span>
+                    <span>Qty di bawah nol</span>
+                    <a href="{{ route('stock') }}" style="margin-left:auto; font-weight:600; color:#b45309;">Tampilkan semua</a>
+                </div>
+            @endif
+
             @if(!$applied)
                 <div class="waiting">
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5h16"/><path d="M7 12h10"/><path d="M10 19h4"/></svg>
@@ -378,7 +391,7 @@
             @elseif(empty($rows))
                 <div class="empty">
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 8l-9-5-9 5 9 5 9-5z"/><path d="M3 8v8l9 5 9-5V8"/><path d="M12 13v8"/></svg>
-                    Tidak ada produk yang cocok dengan filter ini.
+                    {{ $minusOnly ? 'Tidak ada stok minus di gudang ini.' : 'Tidak ada produk yang cocok dengan filter ini.' }}
                 </div>
             @else
                 <div class="table-wrap">

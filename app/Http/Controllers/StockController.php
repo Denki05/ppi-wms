@@ -15,10 +15,11 @@ class StockController extends Controller
         $search    = trim((string) $request->query('search', ''));
         $brand     = trim((string) $request->query('brand', ''));
         $packaging = trim((string) $request->query('packaging', ''));
+        $minus     = $request->boolean('minus');
 
         // Daftar stok baru dimuat setelah ada filter; tanpa filter hanya
         // pilihan filter yang diambil (init) agar tidak query seluruh stok.
-        $applied = $search !== '' || $brand !== '' || $packaging !== '' || $request->has('warehouse_id');
+        $applied = $minus || $search !== '' || $brand !== '' || $packaging !== '' || $request->has('warehouse_id');
 
         $query = $applied
             ? array_filter([
@@ -26,6 +27,7 @@ class StockController extends Controller
                 'brand'        => $request->query('brand'),
                 'packaging'    => $request->query('packaging'),
                 'search'       => $request->query('search'),
+                'minus'        => $minus ? 1 : null,
                 'page'         => $request->query('page'),
             ], function ($value) {
                 return $value !== null && $value !== '';
@@ -44,6 +46,7 @@ class StockController extends Controller
                 'brand'        => $brand,
                 'packaging'    => $packaging,
                 'search'       => $search,
+                'minus'        => $minus,
             ],
         ]);
     }
@@ -107,7 +110,7 @@ class StockController extends Controller
     private function backQuery(Request $request)
     {
         parse_str((string) $request->query('from', ''), $back);
-        $back = array_intersect_key($back, array_flip(['warehouse_id', 'brand', 'packaging', 'search', 'page']));
+        $back = array_intersect_key($back, array_flip(['warehouse_id', 'brand', 'packaging', 'search', 'minus', 'page']));
 
         return array_filter($back, function ($value) {
             return $value !== null && $value !== '';

@@ -208,6 +208,8 @@
             transition: opacity .18s ease;
         }
         .wms-progress.on { opacity: 1; }
+        /* Animasi hanya jalan saat bar tampil — kalau tidak, browser tetap
+           menghitung animasi tanpa terlihat dan aplikasi terasa berat. */
         .wms-progress::before {
             content: '';
             position: absolute;
@@ -216,6 +218,8 @@
             border-radius: 999px;
             background: linear-gradient(90deg, #14b8a6, #0f766e, #14b8a6);
             box-shadow: 0 0 8px rgba(20,184,166,.55);
+        }
+        .wms-progress.on::before {
             animation: wmsProgress 1.05s ease-in-out infinite;
         }
         @keyframes wmsProgress {
@@ -223,7 +227,7 @@
             100% { transform: translateX(365%); }
         }
         @media (prefers-reduced-motion: reduce) {
-            .wms-progress::before { animation-duration: 2s; }
+            .wms-progress.on::before { animation-duration: 2s; }
         }
         /* Splash kecil saat halaman dibuka (full load). */
         .wms-boot {
@@ -454,6 +458,9 @@
         var busy = false;
         var polling = false;
         var dirty = false;
+        var navToken = 0;
+        var pollController = null;
+        var lastPollAt = 0;
         var audioCtx = null;
         var toastMixin = null;
 
@@ -650,12 +657,22 @@
         /* CSS tiap halaman ada di <head> (push styles). Saat konten ditukar,
            blok style halaman lama harus diganti blok style halaman baru. */
         function syncPageStyles(doc) {
-            Array.prototype.forEach.call(document.head.querySelectorAll('style[data-wms-page]'), function (node) {
-                node.parentNode.removeChild(node);
-            });
-            if (!doc) { return; }
-            Array.prototype.forEach.call(doc.head.querySelectorAll('style'), function (old) {
-                if (old.id === 'wmsBaseStyle') { return; }
+            var current = Array.prototype.slice.call(document.head.querySelectorAll('style[data-wms-page]'));
+            var next = doc ? Array.prototype.slice.call(doc.head.querySelectorAll('style')).filter(function (old) {
+                return old.id !== 'wmsBaseStyle';
+            }) : [];
+
+            // CSS sama persis (mis. pindah tab di halaman yang sama) tidak perlu
+            // dibuang lalu dipasang ulang: itu memaksa browser menghitung ulang
+            // seluruh style halaman.
+            var same = current.length === next.length;
+            for (var i = 0; same && i < current.length; i++) {
+                if (current[i].textContent !== next[i].textContent) { same = false; }
+            }
+            if (same) { return; }
+
+            current.forEach(function (node) { node.parentNode.removeChild(node); });
+            next.forEach(function (old) {
                 var style = document.createElement('style');
                 style.setAttribute('data-wms-page', '1');
                 style.textContent = old.textContent;
@@ -696,7 +713,7 @@
             return true;
         }
 
-        function fetchPage(url, silent) {
+        function fetchPage(url, silent, signal) {
             var main = mainEl();
             if (main && !silent) { main.classList.add('wms-live-busy'); }
             if (!silent) { progressStart(); }
@@ -707,7 +724,8 @@
             return fetch(url, {
                 headers: { 'X-Requested-With': 'XMLHttpRequest', 'X-WMS-Live': '1', 'Accept': 'text/html' },
                 credentials: 'same-origin',
-                cache: 'no-store'
+                cache: 'no-store',
+                signal: signal || undefined
             }).then(function (res) {
                 if (!res.ok) { throw new Error('HTTP ' + res.status); }
                 return res.text().then(function (html) {
@@ -722,14 +740,62 @@
             });
         }
 
+        /* Prefetch menu saat kursor berhenti di atasnya, supaya pindah menu
+           terasa instan. TTL singkat: data tetap baru. */
+        var PREFETCH_MS = 10000;
+        var prefetch = {};
+        var prefetchTimer = null;
+
+        function prefetchPage(url) {
+            var now = Date.now();
+            var hit = prefetch[url];
+            if (hit && now - hit.at < PREFETCH_MS) { return; }
+            if (busy || polling || document.hidden) { return; }
+            var entry = { at: now, html: null, url: url, promise: null };
+            entry.promise = fetch(url, {
+                headers: { 'X-Requested-With': 'XMLHttpRequest', 'X-WMS-Live': '1', 'Accept': 'text/html' },
+                credentials: 'same-origin',
+                cache: 'no-store'
+            }).then(function (res) {
+                if (!res.ok) { throw new Error('HTTP ' + res.status); }
+                return res.text();
+            }).then(function (html) {
+                entry.html = html;
+                return html;
+            });
+            prefetch[url] = entry;
+            Object.keys(prefetch).forEach(function (key) {
+                if (now - prefetch[key].at > PREFETCH_MS) { delete prefetch[key]; }
+            });
+        }
+
         function navigate(url, mode) {
             if (busy) { return; }
+            // Hentikan poll yang sedang jalan supaya request halaman tidak
+            // antre di belakang render latar (PHP mengunci sesi per request).
+            cancelPoll();
             busy = true;
-            fetchPage(url, false).then(function (out) {
+            var token = ++navToken;
+            var hit = prefetch[url];
+            delete prefetch[url];
+            var ready;
+            if (hit && Date.now() - hit.at < PREFETCH_MS) {
+                // Prefetch gagal / kosong -> ambil ulang seperti biasa.
+                ready = hit.promise.then(function () {
+                    if (!hit.html) { throw new Error('prefetch kosong'); }
+                    return { html: hit.html, url: hit.url };
+                }).catch(function () { return fetchPage(url, false); });
+            } else {
+                ready = fetchPage(url, false);
+            }
+            ready.then(function (out) {
+                if (token !== navToken) { return; }
                 swapFrom(out.html, out.url, mode);
             }).catch(function () {
-                window.location.href = url;
-            }).then(function () { busy = false; });
+                if (token === navToken) { window.location.href = url; }
+            }).then(function () {
+                if (token === navToken) { busy = false; }
+            });
         }
 
         function isDirty() {
@@ -748,17 +814,41 @@
             return false;
         }
 
+        function cancelPoll() {
+            if (pollController) {
+                try { pollController.abort(); } catch (e) { /* sudah selesai */ }
+                pollController = null;
+            }
+            polling = false;
+        }
+
         function poll() {
-            if (document.hidden || busy || polling || !mainEl() || isDirty()) { return; }
+            // Jangan menembak server saat tab tidak fokus: hemat beban, dan
+            // data tetap disegarkan begitu tab kembali aktif.
+            if (document.hidden || !document.hasFocus() || busy || polling || !mainEl() || isDirty()) { return; }
+            // Event fokus/visibilitychange bisa datang beruntun; jangan sampai
+            // memicu beberapa render penuh dalam hitungan detik.
+            if (Date.now() - lastPollAt < 8000) { return; }
+            lastPollAt = Date.now();
             polling = true;
-            fetchPage(location.href, true).then(function (out) {
+            var token = navToken;
+            var href = location.href;
+            pollController = window.AbortController ? new AbortController() : null;
+            var ctrl = pollController;
+            var signal = ctrl ? ctrl.signal : null;
+            fetchPage(href, true, signal).then(function (out) {
+                // Abaikan hasil poll yang sudah basi (user pindah halaman).
+                if (token !== navToken || href !== location.href) { return; }
                 var doc = new DOMParser().parseFromString(out.html, 'text/html');
                 var fresh = doc.getElementById('wmsContent');
                 var main = mainEl();
                 if (!fresh || !main || fresh.innerHTML === main.innerHTML) { return; }
-                swapFrom(out.html, location.href, 'none');
-            }).catch(function () { /* polling diam saat koneksi putus */ })
-              .then(function () { polling = false; });
+                swapFrom(out.html, href, 'none');
+            }).catch(function () { /* polling diam saat koneksi putus / dibatalkan */ })
+              .then(function () {
+                  polling = false;
+                  if (pollController === ctrl) { pollController = null; }
+              });
         }
 
         function serializeForm(form, action) {
@@ -783,7 +873,9 @@
                 submit.textContent = 'Memproses…';
             }
 
+            cancelPoll();
             busy = true;
+            navToken++;
             var main = mainEl();
             if (main) { main.classList.add('wms-live-busy'); }
             progressStart();
@@ -811,6 +903,8 @@
             }).then(function (out) {
                 if (main) { main.classList.remove('wms-live-busy'); }
                 progressStop();
+                // Aksi bisa mengubah data halaman lain; buang cache prefetch.
+                prefetch = {};
                 swapFrom(out.html, out.url, method === 'GET' ? 'push' : 'replace');
             }).catch(function () {
                 if (main) { main.classList.remove('wms-live-busy'); }
@@ -855,6 +949,22 @@
             if (url.origin !== location.origin) { return; }
             event.preventDefault();
             navigate(url.href, 'push');
+        });
+
+        /* Siapkan halaman begitu kursor berhenti sebentar di menu. */
+        document.addEventListener('mouseover', function (event) {
+            var link = event.target.closest ? event.target.closest('.mainnav a[href]') : null;
+            if (!link || link.hasAttribute('data-native')) { return; }
+            if (link.target && link.target !== '_self') { return; }
+            var href = link.getAttribute('href');
+            if (!href || href.charAt(0) === '#' || /^(javascript|mailto|tel):/i.test(href)) { return; }
+            var url = new URL(link.href, location.href);
+            if (url.origin !== location.origin || url.href === location.href) { return; }
+            if (prefetchTimer) { window.clearTimeout(prefetchTimer); }
+            prefetchTimer = window.setTimeout(function () {
+                prefetchTimer = null;
+                prefetchPage(url.href);
+            }, 130);
         });
 
         /* Submit form: GET filter & POST aksi, semuanya tanpa reload. */
@@ -902,8 +1012,10 @@
             if (main && main.contains(event.target)) { dirty = true; }
         }, true);
 
-        window.addEventListener('popstate', function () { navigate(location.href, 'none'); });
+        window.addEventListener('popstate', function () { navToken++; navigate(location.href, 'none'); });
         document.addEventListener('visibilitychange', function () { if (!document.hidden) { poll(); } });
+        // poll() hanya jalan saat tab fokus; segarkan begitu jendela kembali aktif.
+        window.addEventListener('focus', poll);
         document.addEventListener('DOMContentLoaded', function () {
             hideBoot();
             markPageStyles();
@@ -1225,8 +1337,13 @@
         }
 
         var loading = false;
-        function load() {
+        var lastLoadAt = 0;
+        function load(force) {
             if (loading) return;
+            // Fokus/visibilitychange bisa memicu berulang; minimal 10 detik
+            // sekali kecuali memang diminta lewat panel atau setelah aksi.
+            if (!force && Date.now() - lastLoadAt < 10000) return;
+            lastLoadAt = Date.now();
             loading = true;
             fetch(FEED, { headers: { 'Accept': 'application/json' }, credentials: 'same-origin' })
                 .then(function (res) { return res.json(); })
@@ -1261,7 +1378,7 @@
             panel.hidden = false;
             btn.classList.add('open');
             btn.setAttribute('aria-expanded', 'true');
-            load();
+            load(true);
         }
         function closePanel() {
             panel.hidden = true;
@@ -1286,8 +1403,8 @@
         document.addEventListener('visibilitychange', function () {
             if (document.visibilityState === 'visible') load();
         });
-        window.addEventListener('focus', load);
-        document.addEventListener('wms:notif-refresh', load);
+        window.addEventListener('focus', function () { load(); });
+        document.addEventListener('wms:notif-refresh', function () { load(true); });
         document.addEventListener('wms:swapped', function (event) {
             baseTitle = (event.detail && event.detail.title) || document.title;
             if (lastUnread > 0) {

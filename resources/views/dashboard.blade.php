@@ -432,6 +432,7 @@
             'receiving.qc'           => ['route' => 'receiving', 'params' => ['status' => 'QC']],
             'receiving.menunggu_acc' => ['route' => 'receiving', 'params' => ['status' => 'READY']],
             'komplain.menunggu_acc'  => ['route' => 'komplain', 'params' => ['status' => 'ACTIVE']],
+            'stock.minus'            => ['route' => 'stock', 'params' => ['minus' => 1]],
         ];
 
         $now = \Carbon\Carbon::now('Asia/Jakarta');
