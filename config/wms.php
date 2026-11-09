@@ -17,6 +17,8 @@ return [
     'trans_portal_url' => env('TRANS_PORTAL_URL', 'http://localhost/ppi-dist/public/portal/modules'),
     'trans_url' => env('TRANS_URL', 'http://localhost/ppi-dist/public'),
     'trans_login_url' => env('TRANS_LOGIN_URL', 'http://localhost/ppi-dist/public/auth/superuser'),
+    // Keluar WMS sekaligus mengakhiri sesi portal (logout total).
+    'trans_logout_url' => env('TRANS_LOGOUT_URL', 'http://localhost/ppi-dist/public/superuser/logout'),
 
     'http_timeout' => (int) env('WMS_HTTP_TIMEOUT', 15),
 
@@ -123,7 +125,7 @@ return [
         ],
         [
             'menu'  => 'stock',
-            'label' => 'Inventory - Stock',
+            'label' => 'Stock',
             'items' => [
                 ['key' => 'stock.minus', 'label' => 'Stok minus', 'hint' => 'Qty di bawah nol'],
             ],

@@ -97,7 +97,7 @@ class WmsController extends Controller
         $request->session()->invalidate();
         $request->session()->regenerateToken();
 
-        return redirect()->away(config('wms.trans_login_url'));
+        return redirect()->away(config('wms.trans_logout_url'));
     }
 
     protected function error($message)
