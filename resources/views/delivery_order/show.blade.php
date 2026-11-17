@@ -26,6 +26,10 @@
         $updated = !empty($data['generated_at'])
             ? \Carbon\Carbon::parse($data['generated_at'])->setTimezone('Asia/Jakarta')->format('H:i')
             : null;
+        $roleText = strtoupper(trim(($user['jabatan'] ?? '') . ' ' . ($user['division'] ?? '')));
+        $isDeveloper = strpos($roleText, 'DEVELOPER') !== false;
+        // DO yang sudah DELIVERED dikunci dari cetak ulang SJ, kecuali developer.
+        $canPrintSj = $status !== 'DELIVERED' || $isDeveloper;
     @endphp
 
     <a href="{{ $backUrl }}" class="back-link">
@@ -204,7 +208,7 @@
             </div>
         @endif
 
-        @if(!empty($actions['can_deliver']) || !empty($actions['deliver_blocked']) || in_array($status, ['DELIVERING', 'DELIVERED'], true))
+        @if(!empty($actions['can_deliver']) || !empty($actions['deliver_blocked']) || (in_array($status, ['DELIVERING', 'DELIVERED'], true) && $canPrintSj))
             @php
                 // Nudge: ketika SJ + Berangkat tampil bersama (PACKED), tampilkan urutan langkahnya.
                 $showSteps = !empty($actions['can_deliver']);
@@ -224,7 +228,7 @@
                     </div>
                 @endif
                 <div class="action-buttons">
-                    @if(in_array($status, ['PACKED', 'DELIVERING', 'DELIVERED'], true))
+                    @if($canPrintSj && in_array($status, ['PACKED', 'DELIVERING', 'DELIVERED'], true))
                         <a href="{{ route('delivery_order.print_sj', ['id' => $header['id'], 'from' => $backQuery]) }}"
                            target="_blank" rel="noopener" class="btn-line">
                             @if($showSteps)<span class="step-num">1</span>@endif

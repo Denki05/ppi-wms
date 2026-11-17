@@ -1,0 +1,1096 @@
+<?php
+
+namespace App\Http\Controllers\Superuser\Finance;
+
+use App\Http\Controllers\Controller;
+use Illuminate\Http\Request;
+use App\Entities\Master\CustomerOtherAddress;
+use App\Entities\Penjualan\PackingOrder;
+use App\Entities\Penjualan\PackingOrderCost;
+use App\Entities\Penjualan\PackingOrderDetail;
+use App\Entities\Penjualan\PackingOrderItem;
+use App\DataTables\Finance\InvoicingTable;
+use App\DataTables\Report\PiutangFakturTable;
+use App\Entities\Master\Customer;
+use App\Entities\Master\Company;
+use App\Entities\Master\Ekspedisi;
+use App\Entities\Finance\Invoicing;
+use App\Services\SalesOrder\SalesOrderClosingService;
+use App\Entities\Setting\UserMenu;
+use App\Repositories\CodeRepo;
+use Carbon\Carbon;
+use DB;
+use Auth;
+use PDF;
+use COM;
+
+class InvoicingController extends Controller
+{
+    /**
+     * Display a listing of the resource.
+     *
+     * @return \Illuminate\Http\Response
+     */
+    public function __construct(){
+        $this->route = "superuser.finance.invoicing";
+        $this->view = "superuser.finance.invoicing.";
+        $this->user_menu = new UserMenu;
+        $this->access = null;
+        $this->middleware(function ($request, $next) {
+            $user = Auth::user();
+            $access = $this->user_menu;
+            $access = $access->where('user_id',$user->id)
+                             ->whereHas('menu',function($query2){
+                                $query2->where('route_name',$this->route);
+                             })
+                             ->first();
+            $this->access = $access;
+            return $next($request);
+        });
+    }
+
+    public function json(Request $request, InvoicingTable $datatable)
+    {
+        return $datatable->build($request);
+    }
+
+    public function json2(Request $request, PiutangFakturTable $datatable)
+    {
+        return $datatable->build($request);
+    }
+
+    public function missingInvoices()
+    {
+        if (!$this->isDeveloper()) {
+            return response()->json(['message' => 'Fitur ini hanya untuk user Developer.'], 403);
+        }
+
+        $packings = $this->missingInvoiceQuery()
+            ->orderBy('penjualan_do.id', 'desc')
+            ->get();
+
+        $invoices = Invoicing::withTrashed()
+            ->whereIn('do_id', $packings->pluck('id'))
+            ->orderBy('id')
+            ->get()
+            ->keyBy('do_id');
+
+        $data = $packings->map(function (PackingOrder $packing) use ($invoices) {
+            $invoice = $invoices->get($packing->id);
+
+            return [
+                'id' => $packing->id,
+                'so_code' => $packing->so_code,
+                'do_code' => $packing->do_code,
+                'customer' => $packing->customer_name,
+                'do_status' => PackingOrder::STATUS_PENGIRIMAN[$packing->status]['msg'] ?? (string) $packing->status,
+                'idr_rate' => (float) $packing->idr_rate,
+                'grand_total_idr' => (float) $packing->do_grand_total_idr,
+                'invoice' => $invoice ? [
+                    'code' => $invoice->code,
+                    'status' => $invoice->status() ?: (string) $invoice->status,
+                    'deleted' => $invoice->deleted_at !== null,
+                ] : null,
+            ];
+        })->values();
+
+        return response()->json(['data' => $data]);
+    }
+
+    public function generateMissingInvoices(Request $request, SalesOrderClosingService $closingService)
+    {
+        if (!$this->isDeveloper()) {
+            return response()->json(['message' => 'Fitur ini hanya untuk user Developer.'], 403);
+        }
+
+        $request->validate([
+            'ids' => 'required|array|min:1',
+            'ids.*' => 'integer',
+        ]);
+
+        $requestedIds = collect($request->input('ids'))->unique()->values();
+        $eligibleIds = $this->missingInvoiceQuery()
+            ->whereIn('penjualan_do.id', $requestedIds->all())
+            ->pluck('penjualan_do.id')
+            ->unique()
+            ->values();
+        $skippedIds = $requestedIds->diff($eligibleIds)->values();
+
+        $doCodes = PackingOrder::withTrashed()
+            ->whereIn('id', $requestedIds->all())
+            ->pluck('do_code', 'id');
+
+        $generated = [];
+        $failed = [];
+        $skipped = $skippedIds->map(function ($id) use ($doCodes) {
+            return [
+                'do_id' => $id,
+                'do_code' => $doCodes->get($id),
+                'reason' => 'Tidak lagi memenuhi syarat generate nota.',
+            ];
+        })->values()->all();
+
+        foreach ($eligibleIds as $id) {
+            DB::beginTransaction();
+            try {
+                if (!$closingService->createInvoiceIfNeeded($id)) {
+                    DB::rollBack();
+                    $failed[] = [
+                        'do_id' => $id,
+                        'do_code' => $doCodes->get($id),
+                        'reason' => 'Gagal membuat nota.',
+                    ];
+                    continue;
+                }
+
+                $invoice = Invoicing::where('do_id', $id)->first();
+                $generated[] = [
+                    'do_id' => $id,
+                    'do_code' => $doCodes->get($id),
+                    'invoice_code' => $invoice ? $invoice->code : null,
+                ];
+                DB::commit();
+            } catch (\Throwable $e) {
+                DB::rollBack();
+                \Log::error('Generate missing invoice gagal', [
+                    'do_id' => $id,
+                    'message' => $e->getMessage(),
+                ]);
+                $failed[] = [
+                    'do_id' => $id,
+                    'do_code' => $doCodes->get($id),
+                    'reason' => 'Terjadi kesalahan saat generate.',
+                ];
+            }
+        }
+
+        return response()->json([
+            'generated' => $generated,
+            'failed' => $failed,
+            'skipped' => $skipped,
+            'message' => sprintf(
+                '%d nota berhasil dibuat, %d gagal, %d dilewati.',
+                count($generated),
+                count($failed),
+                count($skipped)
+            ),
+        ]);
+    }
+
+    /**
+     * DO yang sudah layak nota tetapi belum punya nota aktif.
+     * Nota soft-deleted (revisi) tetap masuk karena bisa dipulihkan service;
+     * nota VOID bersifat final sehingga DO-nya tidak boleh digenerate ulang.
+     */
+    private function missingInvoiceQuery()
+    {
+        return PackingOrder::query()
+            ->join('penjualan_so as so', 'so.id', '=', 'penjualan_do.so_id')
+            ->join('penjualan_do_details as dod', 'dod.do_id', '=', 'penjualan_do.id')
+            ->leftJoin('master_customers as c', 'c.id', '=', 'penjualan_do.customer_id')
+            ->whereNull('so.deleted_at')
+            ->whereNull('dod.deleted_at')
+            ->whereIn('penjualan_do.status', [2, 3, 4, 5, 6])
+            ->where('penjualan_do.idr_rate', '>', 1)
+            ->where('dod.grand_total_idr', '>', 0)
+            ->whereDoesntHave('invoicing')
+            ->whereNotExists(function ($query) {
+                $query->select(DB::raw(1))
+                    ->from('finance_invoicing as void_invoice')
+                    ->whereColumn('void_invoice.do_id', 'penjualan_do.id')
+                    ->where('void_invoice.status', Invoicing::STATUS['VOID']);
+            })
+            ->select([
+                'penjualan_do.id',
+                'penjualan_do.so_id',
+                'penjualan_do.do_code',
+                'penjualan_do.status',
+                'penjualan_do.customer_id',
+                'penjualan_do.idr_rate',
+                'penjualan_do.created_at',
+                'so.so_code',
+                'c.name as customer_name',
+                'dod.grand_total_idr as do_grand_total_idr',
+            ]);
+    }
+
+    private function isDeveloper()
+    {
+        $user = Auth::guard('superuser')->user();
+
+        return $user && $user->hasRole('Developer');
+    }
+
+    public function index(Request $request)
+    {
+        // Access
+        if(Auth::user()->is_superuser == 0){
+            if(empty($this->access) || empty($this->access->user) || $this->access->can_read == 0){
+                return redirect()->route('superuser.index')->with('error','Anda tidak punya akses untuk membuka menu terkait');
+            }
+        }
+
+        $search = $request->input('search');
+        $do_id = $request->input('do_id');
+        $customer_id = $request->input('customer_id');
+        $order = PackingOrder::where('status', '>=', 4)
+                            ->doesntHave('invoicing')
+                            ->orderBy('id','DESC')
+                            ->get();
+        $table = Invoicing::whereHas('do',function($query2) use($do_id,$customer_id){
+                                if(!empty($do_id)){
+                                    $query2->where('id',$do_id);
+                                }
+                                if(!empty($customer_id)){
+                                    $query2->where('customer_id',$customer_id);
+                                }
+                            })
+                            ->where(function($query2) use($search){
+                                if(!empty($search)){
+                                    $query2->where('code','like','%'.$search.'%');
+                                }
+                            })
+                            ->orderBy('id','DESC')
+                            ->get();
+        // $table->withPath('invoicing?search='.$search."&do_id=".$do_id."&customer_id=".$customer_id);
+        $customer = CustomerOtherAddress::get();
+        $data = [
+            'order' => $order,
+            'table' => $table,
+            'customer' => $customer
+        ];
+        // return view('superuser.finance.invoicing.index' ,$data);
+        return view($this->view."index",$data);
+    }
+
+    /**
+     * Show the form for creating a new resource.
+     *
+     * @return \Illuminate\Http\Response
+     */
+    public function create(Request $request)
+    {
+        // Access
+        if(Auth::user()->is_superuser == 0){
+            if(empty($this->access) || empty($this->access->user) || $this->access->can_create == 0){
+                return redirect()->route('superuser.index')->with('error','Anda tidak punya akses untuk membuka menu terkait');
+            }
+        }
+
+        $post = $request->all();
+        if(empty($post["id"])){
+            return redirect()->route('superuser.finance.invoicing.index')->with('error','Tidak ada delivery order yang dipilih');
+        }
+        $result = PackingOrder::where('id',$post["id"])->first();
+        if($result->status < 4){
+            return redirect()->route('superuser.finance.invoicing.index')->with('error','Order belum bisa di dieksekusi');
+        }
+        if(!empty($result->invoicing ?? 0)){
+            return redirect()->route('superuser.finance.invoicing.index')->with('error','Invoice sudah dibuat');
+        }
+        $ekspedisi = Ekspedisi::all();
+        $data = [
+            'ekspedisi' => $ekspedisi,
+            'result' => $result
+        ];
+        return view($this->view."create",$data);
+    }
+
+    public function detail($id)
+    {
+        // Access
+        if(Auth::user()->is_superuser == 0){
+            if(empty($this->access) || empty($this->access->user) || $this->access->can_read == 0){
+                return redirect()->route('superuser.index')->with('error','Anda tidak punya akses untuk membuka menu terkait');
+            }
+        }
+
+        // dd($id);
+        $result = PackingOrder::where('id',$id)->first();
+        $data = [
+            'result' => $result
+        ];
+        return view('superuser.finance.invoicing.detail' ,$data);
+    }
+
+    public function history_payable($id)
+    {
+        // Access
+        if(Auth::user()->is_superuser == 0){
+            if(empty($this->access) || empty($this->access->user) || $this->access->can_read == 0){
+                return redirect()->route('superuser.index')->with('error','Anda tidak punya akses untuk membuka menu terkait');
+            }
+        }
+
+        $result = Invoicing::where('id',$id)->first();
+        $data = [
+            'result' => $result
+        ];
+        return view('superuser.finance.invoicing.history_payable', $data);
+    }
+
+    /**
+     * Store a newly created resource in storage.
+     *
+     * @param  \Illuminate\Http\Request  $request
+     * @return \Illuminate\Http\Response
+     */
+    public function store(Request $request)
+    {
+        //
+    }
+
+    /**
+     * Display the specified resource.
+     *
+     * @param  int  $id
+     * @return \Illuminate\Http\Response
+     */
+    public function show($id)
+    {
+        //
+    }
+
+    /**
+     * Show the form for editing the specified resource.
+     *
+     * @param  int  $id
+     * @return \Illuminate\Http\Response
+     */
+    public function edit($id)
+    {
+        //
+    }
+
+    /**
+     * Update the specified resource in storage.
+     *
+     * @param  \Illuminate\Http\Request  $request
+     * @param  int  $id
+     * @return \Illuminate\Http\Response
+     */
+    public function update(Request $request, $id)
+    {
+        //
+    }
+    public function update_other_cost(Request $request){
+        $data_json = [];
+        $post = $request->all();
+        if($request->method() == "POST"){
+            DB::beginTransaction();
+            try{
+                if(count($post["repeater"]) == 0){
+                    $data_json["IsError"] = TRUE;
+                    $data_json["Message"] = "Form tidak boleh kosong";
+                    goto ResultData;
+                }
+                foreach ($post["repeater"] as $index => $value) {
+                    if(empty($value["id"])){
+                        $data_json["IsError"] = TRUE;
+                        $data_json["Message"] = "ID Other Cost tidak boleh kosong";
+                        goto ResultData;   
+                    }
+                    if(empty($value["note"])){
+                        $data_json["IsError"] = TRUE;
+                        $data_json["Message"] = "Note wajib diisi";
+                        goto ResultData;   
+                    }
+                    if(empty($value["cost_idr"])){
+                        $data_json["IsError"] = TRUE;
+                        $data_json["Message"] = "Cost IDR wajib diisi";
+                        goto ResultData;   
+                    }
+
+                    $data = [
+                        'note' => trim(htmlentities($value["note"])),
+                        'cost_idr' => trim(htmlentities($value["cost_idr"])),
+                        'updated_by' => Auth::id(),
+                    ];
+
+                    $update = PackingOrderCost::where('id',$value["id"])->update($data);
+                }
+                DB::commit();
+
+                $data_json["IsError"] = FALSE;
+                $data_json["Message"] = "Cost Berhasil Diubah";
+                goto ResultData;  
+
+            }catch(\Throwable $e){
+                DB::rollback();
+                $data_json["IsError"] = TRUE;
+                $data_json["Message"] = $e->getMessage();
+                goto ResultData; 
+            }
+        }else{
+            $data_json["IsError"]  = TRUE;
+            $data_json["Message"] = "Invalid method";
+            goto ResultData;
+        }
+        ResultData:
+        return response()->json($data_json,200);
+    }
+    public function update_pemesan(Request $request)
+    {
+        $data_json = [];
+        $post = $request->all();
+        if($request->method() == "POST"){
+            DB::beginTransaction();
+            try{
+                if(empty($post["idr_rate"])){
+                    $data_json["IsError"] = TRUE;
+                    $data_json["Message"] = "IDR Rate tidak boleh kosong";
+                    goto ResultData;
+                }
+                if($post["idr_rate"] == 1){
+                    $data_json["IsError"] = TRUE;
+                    $data_json["Message"] = "Harap masukkan IDR Rate yang direkomendasikan";
+                    goto ResultData;
+                }
+                $get = PackingOrder::where('id',$post["id"])->first();
+                $idr_rate = str_replace('.', '', $post["idr_rate"]);
+                
+                $this->reset_cost_if_change_idr_rate($post["id"],$idr_rate);
+
+                $data = [
+                    'idr_rate' => trim(htmlentities($idr_rate)),
+                    'note' => trim(htmlentities($post["note"])),
+                    'updated_by' => Auth::id(),
+                ];
+
+                $update = PackingOrder::where('id',$post["id"])->update($data);
+
+                DB::commit();
+                $data_json["IsError"] = FALSE;
+                $data_json["Message"] = "Data Pemesan Berhasil diubah";
+                goto ResultData;
+              
+            }catch(\Throwable $e){
+                DB::rollback();
+                $data_json["IsError"] = TRUE;
+                $data_json["Message"] = $e->getMessage();
+                goto ResultData;
+            }
+        }
+        else{
+            $data_json["IsError"] = TRUE;
+            $data_json["Message"] = "Invalid Method";
+            goto ResultData;
+        }
+        ResultData:
+        return response()->json($data_json,200);
+    }
+    public function update_cost(Request $request){
+        $data_json = [];
+        $post = $request->all();
+        if($request->method() == "POST"){
+            try{
+                if(empty($post["id"])){
+                    $data_json["IsError"] = TRUE;
+                    $data_json["Message"] = "ID Cost tidak boleh kosong";
+                    goto ResultData;
+                }
+
+                $check_cost = PackingOrderDetail::where('id',$post["id"])->first();
+                $detail_po = PackingOrder::where('id',$check_cost->do_id)->first();
+                $detail_po_item = PackingOrderItem::where('do_id',$check_cost->do_id)->get();
+
+                $idr_total = 0;
+                foreach ($detail_po_item as $key => $row) {
+                    $idr_total += ceil((($row->price * $detail_po->idr_rate) * $row->qty) - ($row->total_disc * $detail_po->idr_rate)); 
+                }
+
+                $discount_1 = empty($post["discount_1"]) ? 0 : $post["discount_1"] / 100;
+                $discount_2 = empty($post["discount_2"]) ? 0 : $post["discount_2"] / 100;
+                $discount_idr = empty($post["discount_idr"]) ? 0 : $post["discount_idr"];
+                $voucher_idr = empty($post["voucher_idr"]) ? 0 : $post["voucher_idr"];
+                $cashback_idr = empty($post["cashback_idr"]) ? 0 : $post["cashback_idr"];
+                $delivery_cost_idr = empty($post["delivery_cost_idr"]) ? 0 : $post["delivery_cost_idr"];
+                $other_cost_idr = empty($post["other_cost_idr"]) ? 0 : $post["other_cost_idr"];
+
+                $discount_idr = str_replace('.', '', $discount_idr);
+                $voucher_idr = str_replace('.', '', $voucher_idr);
+                $cashback_idr = str_replace('.', '', $cashback_idr);
+                $delivery_cost_idr = str_replace('.', '', $delivery_cost_idr);
+                $other_cost_idr = str_replace('.', '', $other_cost_idr);
+
+                $total_discount_idr = ceil(( $idr_total * $discount_1 ) + (($idr_total - ($idr_total * $discount_1)) * $discount_2) + $discount_idr);
+
+                // Nominal diskon dihitung ulang dari persen x subtotal agar tidak stale
+                // (kasus invoice minus: nominal 100x lipat tidak sinkron dengan persen).
+                $discount_1_idr = ceil($idr_total * $discount_1);
+                $discount_2_idr = ceil(($idr_total - $discount_1_idr) * $discount_2);
+
+                $ppn = $check_cost->ppn;
+
+                $purchase_total_idr = ceil($idr_total - $total_discount_idr - $voucher_idr - $cashback_idr + $ppn);
+                $grand_total_idr = ceil($purchase_total_idr + $delivery_cost_idr + $other_cost_idr);
+
+                if($grand_total_idr <= 0){
+                    $data_json["IsError"] = TRUE;
+                    $data_json["Message"] = "Grand total tidak valid (minus/nol), periksa diskon.";
+                    goto ResultData;
+                }
+
+
+                if($total_discount_idr > $grand_total_idr){
+                    $data_json["IsError"] = TRUE;
+                    $data_json["Message"] = "Total Discount melebihi IDR total item pembelian";
+                    goto ResultData;
+                }
+                if($purchase_total_idr > $grand_total_idr){
+                    $data_json["IsError"] = TRUE;
+                    $data_json["Message"] = "Total Purchase melebihi IDR total item pembelian";
+                    goto ResultData;
+                }
+
+                $data = [
+                    'discount_1' => trim(htmlentities($post["discount_1"])),
+                    'discount_2' => trim(htmlentities($post["discount_2"])),
+                    'discount_1_idr' => trim(htmlentities($discount_1_idr)),
+                    'discount_2_idr' => trim(htmlentities($discount_2_idr)),
+                    'discount_idr' => trim(htmlentities($discount_idr)),
+                    'total_discount_idr' => trim(htmlentities($total_discount_idr)),
+                    'voucher_idr' => trim(htmlentities($voucher_idr)),
+                    'cashback_idr' => trim(htmlentities($cashback_idr)),
+                    'purchase_total_idr' => trim(htmlentities($purchase_total_idr)),
+                    'delivery_cost_idr' => trim(htmlentities($delivery_cost_idr)),
+                    'delivery_cost_note' => trim(htmlentities($post["delivery_cost_note"])),
+                    'other_cost_idr' => trim(htmlentities($other_cost_idr)),
+                    'other_cost_note' => trim(htmlentities($post["other_cost_note"])),
+                    'grand_total_idr' => trim(htmlentities($grand_total_idr)),
+                    'updated_by' => Auth::id()
+                ];
+
+                $update = PackingOrderDetail::where('id',$post["id"])->update($data);
+
+                if($update){
+                    $data_json["IsError"] = FALSE;
+                    $data_json["Message"] = "Cost berhasil diubah";
+                    goto ResultData;
+                }
+                else{
+                    $data_json["IsError"] = TRUE;
+                    $data_json["Message"] = "Cost gagal diubah";
+                    goto ResultData;
+                }
+
+            }catch(\Throwable $e){
+                $data_json["IsError"] = TRUE;
+                $data_json["Message"] = $e->getMessage();
+                goto ResultData;
+            }
+        }
+        else{
+            $data_json["IsError"] = TRUE;
+            $data_json["Message"] = "Invalid Method";
+            goto ResultData;
+        }
+        ResultData:
+        return response()->json($data_json,200);
+    }
+    
+    public function store_invoicing(Request $request){
+        $post = $request->all();
+        $request->validate([
+            'do_id' => 'required'
+        ]);
+        try{
+        
+            $cek = Invoicing::where('do_id',$post["do_id"])->first();
+            $cost = PackingOrderCost::where('do_id',$post["do_id"])->sum('cost_idr');
+            $do = PackingOrder::where('id',$post["do_id"])->first();
+            $do_detail = PackingOrderDetail::where('do_id',$do->id)->first();
+            $total = ceil($do_detail->grand_total_idr);
+
+            $image = $request->file('image');
+
+            if($do_detail->grand_total_idr <= 0){
+                return redirect()->route('superuser.finance.invoicing.index')->with('error',"Harga keseluruhan belum disimpan");
+            }
+            
+            if($cek){
+                return redirect()->route('superuser.finance.invoicing.index')->with('error',"Invoicing untuk Order ".$do->do_code." sudah dibuat");
+            }
+            if($do->status < 4){
+                return redirect()->route('superuser.finance.invoicing.index')->with('error',"Delivery order belum bisa ditambahkan ke invoicing");
+            }
+
+            if(!empty($image)){
+                $extension = $image->getClientOriginalExtension();
+                $valid_ext = ['jpeg','png','jpg','gif'];
+
+                if(!in_array(strtolower($extension), $valid_ext)){
+                    return redirect()->route('superuser.finance.invoicing.index')->with('error',"Format image diperbolehkan yaitu jpeg,jpg,png,gif");
+                }
+            }
+
+            $data = [
+                'code' => CodeRepo::generateInvoicing($do->do_code),
+                'do_id' =>trim(htmlentities($post["do_id"])),
+                'grand_total_idr' => $total,
+                'image' => (empty($image)) ? null : $image->store('images/finance/invoicing', 'public'),
+                'created_by' => Auth::id()
+            ];
+
+
+            $insert = Invoicing::create($data);
+
+            if($insert){
+                return redirect()->route('superuser.finance.invoicing.index')->with('success',"Invoice berhasil dibuat"); 
+            }
+            else{
+                return redirect()->route('superuser.finance.invoicing.index')->with('error',"Invoice gagal dibuat"); 
+            }
+
+        }catch(\Throwable $e){
+           return redirect()->route('superuser.finance.invoicing.index')->with('error',$e->getMessage()); 
+        }
+        
+
+    }
+    /**
+     * Remove the specified resource from storage.
+     *
+     * @param  int  $id
+     * @return \Illuminate\Http\Response
+     */
+    public function destroy($id)
+    {
+        //
+    }
+
+    public function print($id)
+    {
+        // Access control
+        if (Auth::user()->is_superuser == 0) {
+            if (empty($this->access) || empty($this->access->user) || $this->access->can_print == 0) {
+                return redirect()->route('superuser.index')->with('error', 'Anda tidak punya akses untuk membuka menu terkait');
+            }
+        }
+
+        $result = Invoicing::where('id', $id)->first();
+        if (!$result) {
+            return redirect()->route('superuser.index')->with('error', 'Invoice not found.');
+        }
+
+        $get_do = PackingOrder::where('id', $result->do_id)->first();
+        if (!$get_do) {
+            return redirect()->route('superuser.index')->with('error', 'Packing Order not found.');
+        }
+
+        $my_report = "C:\\xampp\\htdocs\\ppi-dist\\public\\cr\\invoice\\invoice_rev_2.rpt"; 
+        $my_pdf = 'C:\\xampp\\htdocs\\ppi-dist\\public\\cr\\invoice\\export\\' . $result->code . '.pdf';
+
+        // Crystal Report setup
+        $my_server = "LOCAL";
+        $my_user = "root";
+        $my_password = "";
+        $my_database = "ppi-dist";
+        $COM_Object = "CrystalDesignRunTime.Application";
+
+        $crapp = new COM($COM_Object) or die("Unable to create COM object");
+        $creport = $crapp->OpenReport($my_report, 1);
+
+        $creport->Database->Tables(1)->SetLogOnInfo($my_server, $my_database, $my_user, $my_password);
+        $creport->DiscardSavedData();
+        $creport->VerifyOnEveryPrint = false;
+        $creport->EnableParameterPrompting = false;
+        $creport->RecordSelectionFormula = "{penjualan_do.id} = " . $get_do->id;
+
+        // Export to PDF
+        $creport->ExportOptions->DiskFileName = $my_pdf;
+        $creport->ExportOptions->PDFExportAllPages = true;
+        $creport->ExportOptions->DestinationType = 1;
+        $creport->ExportOptions->FormatType = 31;
+        $creport->Export(false);
+
+        $creport = null;
+        $crapp = null;
+
+        $file = $my_pdf;
+
+        if (file_exists($file)) {
+            // Preview di browser (inline)
+            return response()->file($file, [
+                'Content-Type' => 'application/pdf',
+                'Content-Disposition' => 'inline; filename="' . basename($file) . '"'
+            ]);
+        } else {
+            return redirect()->route('superuser.index')->with('error', 'File not found.');
+        }
+    }
+
+
+    public function print2($id)
+    {
+        // Access control
+        if (Auth::user()->is_superuser == 0) {
+            if (empty($this->access) || empty($this->access->user) || $this->access->can_print == 0) {
+                return redirect()->route('superuser.index')->with('error', 'Anda tidak punya akses untuk membuka menu terkait');
+            }
+        }
+
+        $result = Invoicing::where('id', $id)->first();
+        if (!$result) {
+            return redirect()->route('superuser.index')->with('error', 'Invoice not found.');
+        }
+
+        $get_do = PackingOrder::where('id', $result->do_id)->first();
+        if (!$get_do) {
+            return redirect()->route('superuser.index')->with('error', 'Packing Order not found.');
+        }
+
+        $my_report = "C:\\xampp\\htdocs\\ppi-dist\\public\\cr\\invoice\\full.rpt"; 
+        $my_pdf = 'C:\\xampp\\htdocs\\ppi-dist\\public\\cr\\invoice\\export\\' . $result->code . '-FULL' . '.pdf';
+
+        // Crystal Report
+        $my_server = "LOCAL";
+        $my_user = "root";
+        $my_password = "";
+        $my_database = "ppi-dist";
+        $COM_Object = "CrystalDesignRunTime.Application";
+
+        $crapp = new COM($COM_Object) or die("Unable to create COM object");
+        $creport = $crapp->OpenReport($my_report, 1);
+
+        $creport->Database->Tables(1)->SetLogOnInfo($my_server, $my_database, $my_user, $my_password);
+        $creport->DiscardSavedData();
+        $creport->VerifyOnEveryPrint = false;
+        $creport->EnableParameterPrompting = false;
+        $creport->RecordSelectionFormula = "{penjualan_do.id} = " . $get_do->id;
+
+        $creport->ExportOptions->DiskFileName = $my_pdf;
+        $creport->ExportOptions->PDFExportAllPages = true;
+        $creport->ExportOptions->DestinationType = 1;
+        $creport->ExportOptions->FormatType = 31;
+        $creport->Export(false);
+
+        $creport = null;
+        $crapp = null;
+        $ObjectFactory = null;
+
+        $file = $my_pdf;
+
+        if (file_exists($file)) {
+            // Preview di browser (inline)
+            return response()->file($file, [
+                'Content-Type' => 'application/pdf',
+                'Content-Disposition' => 'inline; filename="' . basename($file) . '"'
+            ]);
+        } else {
+            return redirect()->route('superuser.index')->with('error', 'File not found.');
+        }
+    }
+
+    // public function print_paid($id, $type = null){
+    //     return $this->print($id, true, $type);
+    // }
+
+    // public function print_portait($id){
+
+    //     return $this->print($id, true, 2);
+    // }
+
+    public function print_proforma($id){
+        // Access
+        if(Auth::user()->is_superuser == 0){
+            if(empty($this->access) || empty($this->access->user) || $this->access->can_print == 0){
+                return redirect()->route('superuser.index')->with('error','Anda tidak punya akses untuk membuka menu terkait');
+            }
+        }
+
+        $result = Invoicing::where('id',$id)->first();
+        
+        $get_do = PackingOrder::where('id', $result->do_id)->first();
+        
+        // CR
+        $my_report = "C:\\xampp\\htdocs\\ppi-dist\public\\cr\\invoice\\invoice_new_1.rpt"; 
+        $my_pdf = "C:\\xampp\\htdocs\\ppi-dist\\public\\cr\\invoice\\export\\invoice.pdf";
+
+        //- Variables - Server Information 
+        $my_server = "DEV-PPIDIST"; 
+        $my_user = "root"; 
+        $my_password = ""; 
+        $my_database = "ppi-dist";
+        $COM_Object = "CrystalDesignRunTime.Application";
+
+
+        //-Create new COM object-depends on your Crystal Report version
+        $crapp= New COM($COM_Object) or die("Unable to Create Object");
+        $creport = $crapp->OpenReport($my_report,1); // call rpt report
+
+        // to refresh data before
+
+        //- Set database logon info - must have
+        $creport->Database->Tables(1)->SetLogOnInfo($my_server, $my_database, $my_user, $my_password);
+        $creport->DiscardSavedData();
+        $creport->VerifyOnEveryPrint = false;
+
+        //- field prompt or else report will hang - to get through
+        $creport->EnableParameterPrompting = FALSE;
+        $creport->RecordSelectionFormula = "{penjualan_do.id}= $get_do->id";
+
+
+        //export to PDF process
+        $creport->ExportOptions->DiskFileName=$my_pdf; //export to pdf
+        $creport->ExportOptions->PDFExportAllPages=true;
+        $creport->ExportOptions->DestinationType=1; // export to file
+        $creport->ExportOptions->FormatType=31; // PDF type
+        $creport->Export(false);
+
+        //------ Release the variables ------
+        $creport = null;
+        $crapp = null;
+        $ObjectFactory = null;
+
+        $file = "C:\\xampp\\htdocs\\ppi-dist\\public\\cr\\invoice\\export\\invoice.pdf";
+
+        header("Content-Description: File Transfer"); 
+        header("Content-Type: application/octet-stream"); 
+        header("Content-Disposition: attachment; filename=\"". basename($file) ."\""); 
+
+        readfile ($file);
+        exit();
+    }
+
+    private function reset_cost_if_change_idr_rate($do_id,$idr_rate){
+        $do = PackingOrder::where('id',$do_id)->first();
+        $result = PackingOrderDetail::where('do_id',$do_id)->first();
+
+        $check_po = PackingOrderItem::where('do_id',$result->do_id)->get();
+        $idr_total = 0;
+
+        foreach ($check_po as $key => $row) {
+            $idr_total += ceil(((($row->price * $do->idr_rate) * $row->qty ) - ($row->total_disc * $do->idr_rate))); 
+        }
+
+        $discount_1 = floatval($result->discount_1) / 100;
+        $discount_2 = floatval($result->discount_2) / 100;
+        $discount_idr = ($result->discount_idr);
+
+        $total_discount_idr = ceil(( $idr_total * $discount_1 ) + (($idr_total - ($idr_total * $discount_1)) * $discount_2) + $discount_idr);
+
+        if($result->ppn > 0){
+            $ppn = ceil(($idr_total - $total_discount_idr ) * (10/100));
+        }
+        else{
+            $ppn = 0;
+        }
+
+        $voucher_idr = $result->voucher_idr;
+        $cashback_idr = $result->cashback_idr;
+        $purchase_total_idr = ceil($idr_total - $total_discount_idr - $voucher_idr - $cashback_idr + $ppn);
+        $delivery_cost_idr = $result->delivery_cost_idr;
+        $other_cost_idr = $result->other_cost_idr;
+        $grand_total_idr = ceil($purchase_total_idr + $delivery_cost_idr + $other_cost_idr);
+
+        $data = [
+            'ppn' => $ppn,
+            'total_discount_idr' => trim(htmlentities($total_discount_idr)),
+            'purchase_total_idr' => trim(htmlentities($purchase_total_idr)),
+            'grand_total_idr' => trim(htmlentities($grand_total_idr)),
+            'updated_by' => Auth::id()
+        ];
+
+        $update = PackingOrderDetail::where('do_id',$do_id)->update($data);
+        return true;        
+    }
+
+    private function reset_cost($id){
+      $data = [
+          'discount_1' => 0,
+          'discount_2' => 0,
+          'discount_idr' => 0,
+          'total_discount_idr' => 0,
+          'ppn' => 0,
+          'voucher_idr' => 0,
+          'cashback_idr' => 0,
+          'purchase_total_idr' => 0,
+          'delivery_cost_idr' => 0,
+          'other_cost_idr' => 0,
+          'grand_total_idr' => 0,
+          'updated_by' => Auth::id()
+      ];
+
+      $update = PackingOrderDetail::where('do_id',$id)->update($data);
+      return true;
+    }
+
+    public function updateInvoice(Request $request)
+    {
+        $result = PackingOrder::where('status', 6)
+        ->select(
+            'penjualan_do.id AS doID', 
+            'penjualan_do.do_code AS do_code', 
+            'penjualan_do.pic AS do_pic', 
+            'penjualan_do.officer AS do_officer', 
+            'penjualan_do.account_representative AS do_ar', 
+            'penjualan_do.customer_id AS customer_id', 
+            'penjualan_do.customer_other_address_id AS customer_other_address_id'
+        )
+        ->where(function ($query) {
+            $query->orWhereNull('penjualan_do.pic')
+                  ->orWhereNull('penjualan_do.officer')
+                  ->orWhereNull('penjualan_do.account_representative');
+        })
+        ->get();
+
+        foreach($result AS $row){
+            $customer = DB::table('master_customers')
+                ->select(
+                    'master_customers.pic AS pic', 
+                    'master_customer_other_addresses.officer AS officer', 
+                    'master_customer_other_addresses.account_representative AS ar'
+                )
+                ->leftJoin('master_customer_other_addresses', 'master_customers.id', '=', 'master_customer_other_addresses.customer_id')
+                ->where('master_customers.id', $row->customer_id)
+                ->where('master_customer_other_addresses.id', $row->customer_other_address_id)
+                ->first();
+
+            if($customer){
+                $data = PackingOrder::find($row->doID);
+
+                if (is_null($data->pic) && $data->officer && $data->account_representative || $data->status == 6) {
+                    $data->pic = $customer->pic;
+                    $data->officer = $customer->officer;
+                    $data->account_representative = $customer->ar;
+                    $data->save();
+                }
+            }
+        }
+
+        return redirect()->back()->with('message', 'Berhasil Update!');
+    }
+
+    public function pageReport(Request $request)
+    {
+        // Access
+        if(Auth::user()->is_superuser == 0){
+            if(empty($this->access) || empty($this->access->user) || $this->access->can_read == 0){
+                return redirect()->route('superuser.index')->with('error','Anda tidak punya akses untuk membuka menu terkait');
+            }
+        }
+
+        // $currentDate = Carbon::now();
+        $customer = Customer::select('id', 'name', 'text_kota')->get();
+
+        $data = [
+            'customer' => $customer
+        ];
+        // return view('superuser.finance.invoicing.index' ,$data);
+        return view($this->view."report",$data);
+    }
+
+    public function printReportPage(Request $request)
+    {
+        $start = $request->input('start');
+        $end = $request->input('end');
+        $customer = $request->input('customer');
+        $status = $request->input('status');
+        $date = date("Y-m");
+
+        // Convert dates
+        $new_date_start = date('d-m-Y', strtotime($start));
+        $new_date_end = date('d-m-Y', strtotime($end));
+
+        // Construct SQL-style filter for customers
+        $sqlStyle = $this->buildCustomerFilter($customer);
+
+        $my_report = public_path('cr/report/operasional/payment_invoicing/payment_check_list.rpt');
+        $my_pdf = public_path("cr/report/operasional/payment_invoicing/export/Invoicing-Check-$date.pdf");
+
+        $creport = $this->generateCrystalReport($my_report, $sqlStyle, $new_date_start, $new_date_end, $start, $end, $status);
+        
+        // Export and prepare for download
+        $creport->ExportOptions->DiskFileName = $my_pdf;
+        $this->exportReportToPDF($creport);
+
+        // Clean up
+        $this->cleanupCrystalObjects($creport);
+
+        // File download response
+        return $this->downloadFile($my_pdf);
+    }
+
+    // Helper method to build the customer filter
+    private function buildCustomerFilter($customer)
+    {
+        $sqlStyle = "";
+        $i = 1;
+        foreach ($customer as $key => $value) {
+            if ($i > 1) {
+                $sqlStyle .= " OR ";
+            }
+
+            if (is_array($value)) {
+                $sqlStyle .= "(" . implode(' AND ', array_map(function($second_level) {
+                    return "{master_customer_other_addresses.id}='$second_level'";
+                }, $value)) . ")";
+            } else {
+                $sqlStyle .= "{master_customer_other_addresses.id}='$value'";
+            }
+            $i++;
+        }
+        return $sqlStyle;
+    }
+
+    // Helper to initialize and set parameters for the Crystal Report
+    private function generateCrystalReport($reportPath, $sqlString, $new_date_start, $new_date_end, $start, $end, $status)
+    {
+        $crapp = new COM("CrystalDesignRunTime.Application") or die("Unable to Create Object");
+        $creport = $crapp->OpenReport($reportPath, 1);
+
+        // // Database connection
+        // $creport->Database->Tables(1)->SetLogOnInfo("LOCAL", "ppi-araya", "root", "");
+        $my_server = "LOCAL_3";
+        $my_user = "root";
+        $my_password = "";
+        $my_database = "ppi-dist";
+        $COM_Object = "CrystalDesignRunTime.Application";
+
+        $creport->Database->Tables(1)->SetLogOnInfo($my_server, $my_database, $my_user, $my_password);
+        $creport->DiscardSavedData();
+        $creport->VerifyOnEveryPrint = false;
+
+        // Set parameters
+        $creport->EnableParameterPrompting = false;
+        $creport->ParameterFields(5)->SetCurrentValue($new_date_start);
+        $creport->ParameterFields(6)->SetCurrentValue($new_date_end);
+
+        // Set record selection formula
+        $creport->RecordSelectionFormula = "($sqlString)AND{penjualan_so.so_date}>=#$start#AND{penjualan_so.so_date}<=#$end#AND{@status_faktur}='{$status}'";
+
+        return $creport;
+    }
+
+// Export report to PDF
+    private function exportReportToPDF($creport)
+    {
+        $creport->ExportOptions->PDFExportAllPages = true;
+        $creport->ExportOptions->DestinationType = 1; // export to file
+        $creport->ExportOptions->FormatType = 31; // PDF type
+        $creport->Export(false);
+    }
+
+    // Clean up Crystal Report objects
+    private function cleanupCrystalObjects(&$creport)
+    {
+        $creport = null;
+    }
+
+    // Handle file download
+    private function downloadFile($filePath)
+    {
+        if (file_exists($filePath)) {
+            // Optionally, you can provide a file name if you want to customize the download name
+            $fileName = basename($filePath);
+            
+            return response()->download($filePath, $fileName);
+        } else {
+            // Optionally log the error for tracking
+            \Log::error("File not found: " . $filePath);
+
+            abort(404, "File not found.");
+        }
+    }
+}
